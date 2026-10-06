@@ -54,7 +54,7 @@
   <div class="plate"><canvas id="cv" width="640" height="640"></canvas></div>
   <div class="row">
     <button class="go" id="bDemo">▶ Demo</button>
-    <button id="bTab">🖥 Tab / system audio</button>
+    <button id="bTab">Tab / system audio</button>
   </div>
   <div class="row">
     <button id="bShake">⟲ Shake off</button>
@@ -714,7 +714,9 @@ class Plate {
 
   stepGpu() {
     const circle = this.shape === "circle", N = this.gpu.N;
-    if (this.gpuReset) { this.gpuReset = false; this.gpu.step({ mode: 3, active: N, circle, drift: 0, kick: 0, fallT: 0 }); return; }
+    if (this.gpuReset) {                           // re-scatter the grains, but the plate starts empty: draw none yet
+      this.gpuReset = false; this.gpu.step({ mode: 3, active: N, circle, drift: 0, kick: 0, fallT: 0 }); this.gpu.active = 0; return;
+    }
     if (this.falling) {
       this.fallT++;
       this.gpu.step({ mode: this.fallT < 16 ? 1 : 2, active: Math.floor(this.mass * N), circle, drift: 0, kick: 0, fallT: this.fallT }, this.E, this.EX, this.EY);
