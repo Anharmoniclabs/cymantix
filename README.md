@@ -1,63 +1,22 @@
 # Cymantix
 
-A Chladni sand simulation driven by audio. Solved square or circular plate modes
-respond to sound near their resonances, and grains move toward low-vibration regions.
+A Chladni sand plate that reacts to music. Sound drives a virtual square plate
+(modes `cos(nπx)cos(mπy) − s·cos(mπx)cos(nπy)`, `f ≈ F₀(n²+m²)`); each mode is
+excited by the energy near its own resonance, loudness sets the drive, and the
+sand slides to the nodal lines.
 
-**Web player:** https://anharmoniclabs.github.io/cymantix/ — demo, microphone,
-audio file, shared tab/system audio (where supported), or a low-volume test tone.
-Audio is processed locally in the browser.
+**Web player:** https://anharmoniclabs.github.io/cymantix/ — play a demo, an audio
+file, a shared tab's audio, or the microphone. Everything runs in your browser.
 
-## HD web player
+## Sand refinement
 
-- **1024 × 1024 rendering**, up from 320 × 320 (10.24 times the rendered pixels).
-  Subpixel grain coverage and continuous density shading replace the old blurred,
-  quantized image. Up to 262,144 GPU grains, with adjustable sand amount;
-  26,000-grain CPU fallback. This does not increase the solved mode grid beyond 160 × 160.
-- **Crisper nodal lines:** lower grain jitter, interpolated GPU field sampling,
-  and energy-limited settling steps reduce spread and overshoot. A damped
-  resonance response reduces off-frequency mode smearing. Transient detection
-  uses FFT magnitudes so RFT phase variation does not scatter sand under a steady tone.
-- **20 Hz–20 kHz spectrum**, capped at half the actual audio sample rate.
-  Each stereo channel has a 32,768-sample bass analyser and a 2,048-sample fast
-  analyser. The display aggregates these into 96 logarithmic bands. Channel
-  magnitudes are combined without cancelling opposite-phase stereo signals.
-- **Continuous block metering** with AudioWorklet retains RMS and peak energy
-  between visual frames, including short bursts. Frame-sample metering is used
-  if worklets are unavailable. This is continuous level capture, not a recording
-  or a claim to resolve every frequency in every short transient.
-- **Automatic input matching.** A relative spectral floor and fast-attack,
-  recovering loudness reference follow quiet and loud recordings without manual
-  sensitivity or threshold controls. Playback gain stays unchanged. Microphone capture requests echo cancellation, noise
-  suppression, and automatic gain control off; hardware/browser support varies.
-- **Distinct measurements:** dominant frequency, digital input level (dBFS),
-  and excited plate resonance. The square dataset has 128 modes from about
-  74–7,447 Hz; the circular dataset has 131 modes from about 74–7,384 Hz.
-  Out-of-resonance audio can agitate grains without inventing a plate mode.
-- **Source lifecycle:** stop releases capture tracks; switching sources stops
-  the old source; cancelled permissions leave the current source alone.
-
-Frequency resolution and latency depend on the window length and sample rate.
-At 48 kHz the bass bin spacing is about 1.46 Hz and its window is about 683 ms;
-the fast window is about 43 ms. Rendering and modal analysis run on the visual
-thread and can slow on busy devices. The microphone, audio interface, speakers,
-and browser set the physical capture/playback limits. This is not a calibrated
-sound-pressure or vibration instrument and cannot detect every physical vibration.
-
-### Web verification
-
-Serve the repository with `python -m http.server 8765`, install Playwright and
-its Chromium browser in your development environment, then run:
-
-```sh
-node tools/verify-web.cjs
-```
-
-`CYMANTIX_URL` can select a different local server;
-`CHROMIUM_EXECUTABLE_PATH` can select an installed Chromium binary.
-The test exercises real Web Audio with generated tones, stereo cancellation,
-short-burst capture, automatic quiet-input response, microphone release using a synthetic device,
-file playback, plate shapes, mobile widths, and CPU/missing-RFT fallback.
-It does not validate the frequency response of a physical microphone.
+The original web layout and controls are preserved. Sand now renders at
+1024 × 1024 instead of 320 × 320, with individual grain coverage rather than
+blurred density pixels. Interpolated GPU field sampling, lower jitter and
+energy-limited settling sharpen nodal lines. FFT-based transient detection
+avoids false impacts from RFT coefficient phase changes under steady tones;
+damped resonance weighting reduces off-frequency pattern smearing.
+The underlying solved mode grid remains 160 × 160.
 
 ## The plate
 
@@ -74,7 +33,7 @@ It does not validate the frequency response of a physical microphone.
   strength, and how much the mode moves at the driving point.
 - **Bowing.** Drag across the plate: the pointer position picks the modes that move most there
   (a node can't be bowed), speed is the bow pressure, and the sound runs through the same ears.
-- **GPU sand.** Up to 262,144 grains advanced by a WebGL2 shader (CPU fallback: 26,000).
+- **GPU sand.** 262,144 grains advanced by a WebGL2 shader (CPU fallback: 26,000).
 
 The ideas above come from reading other open-source Chladni projects (chladni-tui, MMM-Chladni,
 Resonance Lab, Chladni Plate Visualizer); the code here is an independent implementation.
