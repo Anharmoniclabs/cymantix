@@ -14,6 +14,9 @@
     :root { --bg: #ece7da; --panel: #f6f2e8; --line: #d3ccb8; --text: #22242a;
             --dim: #6c6e78; --sand: #b8872f; --ink: #fffaf0; }
   }
+  :root[data-lit] { --bg: #101218; --panel: #1c1f26; --line: #2c313b; --text: #efe9da;
+                    --dim: #9a9ca6; --sand: #e2c48c; --ink: #181a20; }
+  body { transition: background-color .7s, color .7s; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 15px/1.5 system-ui, sans-serif; min-height: 100vh;
@@ -22,8 +25,14 @@
   h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: .04em; }
   .sub { color: var(--dim); margin: 0 0 16px; font-size: 13px; text-align: center; }
   .wrap { width: min(100%, 640px); }
+  :root { --glow: 226,196,140; --ga: 0; }
+  body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+                 background: radial-gradient(ellipse at 50% 38%, rgba(var(--glow), calc(var(--ga) * .55)) 0%,
+                             rgba(var(--glow), calc(var(--ga) * .18)) 38%, transparent 72%); }
   .plate { background: linear-gradient(135deg, #5c626e, #282c34); border-radius: 22px;
-           padding: 12px; box-shadow: 0 8px 30px #0006; }
+           padding: 12px;
+           box-shadow: 0 0 calc(24px + 90px * var(--ga)) calc(2px + 14px * var(--ga)) rgba(var(--glow), calc(.10 + .55 * var(--ga))),
+                       0 8px 30px #0006; }
   canvas { display: block; width: 100%; aspect-ratio: 1; border-radius: 10px; background: #1a1d24; }
   .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
   button { background: var(--panel); color: var(--text); border: 1px solid var(--line);
@@ -178,7 +187,7 @@ class Bank {
   }
   db(s) {                                       // dB in each plate mode's band, plus spectral peak
     if (this.every > 1 && this.last && this.n++ % this.every) return this.last;   // reuse the last result
-    const spec = this.long(s), M = this.lo.length;
+    const spec = this.spec = this.long(s), M = this.lo.length;
     if (!this.cs || this.cs.length !== spec.length + 1) { this.cs = new Float64Array(spec.length + 1); this.mdb = new Float32Array(M); }
     const cs = this.cs; let pk = 0;
     for (let i = 0; i < spec.length; i++) { cs[i + 1] = cs[i] + spec[i] * spec[i]; if (this.sel[i] && spec[i] > pk) pk = spec[i]; }
@@ -294,6 +303,46 @@ function rftBank(mf, UHl, UHs) {
   return new Bank(fl, flong, fs, fshort, lo, hi, slo, shi, SN / (2 * RFT_SHORT));
 }
 
+// ============================================================ colour of pitch
+// Transpose a sound frequency up by whole octaves until it lands in the visible band
+// (405-810 THz is exactly one octave), then turn that light frequency into RGB. Every
+// pitch class gets the colour it would have if the note were light: A440 is orange-red,
+// C4 is green, and an octave up or down never changes the hue.
+function wavelengthRGB(w) {
+  let r = 0, g = 0, b = 0;
+  if (w < 440) { r = (440 - w) / 60; b = 1; }
+  else if (w < 490) { g = (w - 440) / 50; b = 1; }
+  else if (w < 510) { g = 1; b = (510 - w) / 20; }
+  else if (w < 580) { r = (w - 510) / 70; g = 1; }
+  else if (w < 645) { r = 1; g = (645 - w) / 65; }
+  else r = 1;
+  const k = w < 420 ? 0.35 + 0.65 * (w - 380) / 40 : w > 700 ? 0.35 + 0.65 * (750 - w) / 50 : 1;
+  return [r, g, b].map(c => Math.pow(c * k, 0.8));
+}
+function pitchColor(f) {
+  let fl = f * 2 ** 40;                         // near the visible band already
+  while (fl < 405e12) fl *= 2;
+  while (fl >= 810e12) fl /= 2;
+  return wavelengthRGB(clamp(299792458 / fl * 1e9, 380, 750));
+}
+const NOTES = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
+// True pitch near a plate mode: parabolic peak interpolation on the FFT magnitudes, so a
+// 261.6 Hz tone is coloured as C4 even though the plate's nearest resonance is a semitone away.
+function interp(spec, k) {                       // parabolic peak interpolation on log magnitudes
+  const a = Math.log(spec[k - 1] + 1e-12), b = Math.log(spec[k] + 1e-12), c = Math.log(spec[k + 1] + 1e-12);
+  return (k + clamp(0.5 * (a - c) / (a - 2 * b + c), -0.5, 0.5)) * RATE / FFT_N;
+}
+function peakNear(spec, f0, span, floor) {       // strongest genuine local max within +-span of f0, or 0
+  const df = RATE / FFT_N, lo = Math.max(2, Math.floor(f0 * (1 - span) / df)), hi = Math.min(spec.length - 3, Math.ceil(f0 * (1 + span) / df));
+  let k = -1;
+  for (let i = lo; i <= hi; i++) if (spec[i] > spec[i - 1] && spec[i] >= spec[i + 1] && (k < 0 || spec[i] > spec[k])) k = i;
+  return k < 0 || spec[k] < floor || spec[k] < 1e-6 ? 0 : interp(spec, k);
+}
+function noteName(f) {
+  const x = 12 * Math.log2(f / 440) + 69, n = Math.round(x), c = Math.round((x - n) * 100);
+  return NOTES[((n % 12) + 12) % 12] + (Math.floor(n / 12) - 1) + (Math.abs(c) >= 5 ? ` ${c > 0 ? "+" : ""}${c}¢` : "");
+}
+
 // ============================================================ plate physics
 function buildModes() {
   const modes = [];
@@ -324,6 +373,7 @@ class Plate {
     this.bflux = [1, 1, 1]; this.blast = [-99, -99, -99];
     this.frame = 0; this.db = -90; this.dbRef = -40;
     this.level = 0; this.hit = 0; this.hitFlash = 0; this.freq = 0; this.top = null;
+    this.light = [0.89, 0.77, 0.55]; this.glow = 0; this.pitch = 0;       // lamp colour (additive mix of ringing pitches) and brightness
     this.useRft = true; this.rftState = "building";
     this.banks = {};
     this.reset();
@@ -399,6 +449,36 @@ class Plate {
       if (this.amp[i] < 0.003) this.amp[i] = 0;
     }
     this.buildField();
+    this.updateLight();
+  }
+
+  truePitch(spec, i) {
+    // the pitch actually heard near mode i; if nothing real is near it (the plate has no resonance
+    // there), fall back to the strongest tone anywhere in the spectrum
+    if (!spec) return this.mf[i];
+    const df = RATE / FFT_N, lo = Math.max(2, Math.ceil(35 / df)), hi = Math.min(spec.length - 3, Math.floor(7500 / df));
+    let gk = lo; for (let j = lo; j <= hi; j++) if (spec[j] > spec[gk]) gk = j;
+    return peakNear(spec, this.mf[i], 0.12, 0.3 * spec[gk]) || interp(spec, gk);
+  }
+
+  updateLight() {
+    // the strongest ringing modes each contribute their pitch's colour, as lights add
+    const act = [], spec = this.banks.FFT && this.banks.FFT.spec;
+    for (let i = 0; i < this.amp.length; i++) if (this.amp[i] > 0.05) act.push(i);
+    act.sort((a, b) => this.amp[b] - this.amp[a]);
+    let r = 0, g = 0, b = 0, tw = 0;
+    for (const i of act.slice(0, 3)) {
+      const w = this.amp[i] ** 2, fp = this.truePitch(spec, i), c = pitchColor(fp);
+      if (i === act[0]) this.pitch = fp;
+      r += w * c[0]; g += w * c[1]; b += w * c[2]; tw += w;
+    }
+    if (tw > 0) {                                // keep the last colour while quiet; just let it fade
+      const m = Math.max(r, g, b);
+      const tgt = [r / m, g / m, b / m];
+      for (let j = 0; j < 3; j++) this.light[j] += (tgt[j] - this.light[j]) * 0.18;
+    }
+    const gt = this.level > 0.02 ? 0.3 + 0.7 * this.level : 0;
+    this.glow += (gt - this.glow) * 0.2;
   }
 
   buildField() {
@@ -473,12 +553,19 @@ const cv = $("cv"), g = cv.getContext("2d");
 const off = document.createElement("canvas"); off.width = off.height = GRID;
 const og = off.getContext("2d"), img = og.createImageData(GRID, GRID), px = new Uint32Array(img.data.buffer);
 const dens = new Float32Array(GRID * GRID), sm = new Float32Array(GRID * GRID);
-const lut = new Uint32Array(64);
-for (let i = 0; i < 64; i++) {
-  const v = 1 - Math.exp(-i / 2 * 0.9), c = [26, 29, 36].map((b, j) => b + ([226, 196, 140][j] - b) * v);
-  lut[i] = (255 << 24) | (Math.round(c[2]) << 16) | (Math.round(c[1]) << 8) | Math.round(c[0]);
+const lr = new Float32Array(64), lg = new Float32Array(64), lb = new Float32Array(64);
+function buildLut() {
+  // sand takes the colour of the light; the bare plate picks up a faint wash of it
+  const L = plate.light, gl = plate.glow;
+  const sand = [226, 196, 140].map((c, j) => c * 0.4 + 255 * L[j] * 0.6);
+  const base = [26, 29, 36].map((c, j) => c + 255 * L[j] * (0.03 + 0.13 * gl));
+  for (let i = 0; i < 64; i++) {
+    const v = 1 - Math.exp(-i / 2 * 0.9);
+    lr[i] = base[0] + (sand[0] - base[0]) * v; lg[i] = base[1] + (sand[1] - base[1]) * v; lb[i] = base[2] + (sand[2] - base[2]) * v;
+  }
 }
 function renderSand() {
+  buildLut();
   dens.fill(0);
   const k = Math.floor(plate.mass * GRAINS), p = plate.p;
   for (let i = 0; i < k; i++) {
@@ -490,28 +577,59 @@ function renderSand() {
     let v = dens[o];
     if (y > 0) v += 0.5 * dens[o - GRID]; if (y < GRID - 1) v += 0.5 * dens[o + GRID];
     if (x > 0) v += 0.5 * dens[o - 1]; if (x < GRID - 1) v += 0.5 * dens[o + 1];
-    px[o] = lut[Math.min((v * 2) | 0, 63)];
+    sm[o] = v;
+  }
+  // light from the upper left: piles facing it are brighter, the far side falls into shadow
+  for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) {
+    const o = y * GRID + x, i = Math.min((sm[o] * 2) | 0, 63);
+    let sh = 1;
+    if (i > 0 && x > 0 && y > 0 && x < GRID - 1 && y < GRID - 1)
+      sh = clamp(1 + 0.09 * ((sm[o + 1] - sm[o - 1]) + (sm[o + GRID] - sm[o - GRID])), 0.6, 1.5);
+    px[o] = (255 << 24) | (Math.min(255, lb[i] * sh) << 16) | (Math.min(255, lg[i] * sh) << 8) | Math.min(255, lr[i] * sh);
   }
   og.putImageData(img, 0, 0);
 }
-function draw() {
-  const W = cv.width, pl = plate;
+function draw(t) {
+  const W = cv.width, pl = plate, [r, g0, b0] = pl.light.map(c => Math.round(c * 255)), rgb = `${r},${g0},${b0}`;
+  const pulse = pl.glow * 0.5 + 0.5 * pl.hitFlash;
   g.imageSmoothingEnabled = true;
   g.save();
   if (pl.falling && pl.fallT < 16) g.translate((Math.random() - .5) * 5, (Math.random() - .5) * 5);
   g.drawImage(off, 0, 0, W, W);
-  g.lineWidth = 3 + 4 * pl.hitFlash;
-  g.strokeStyle = `rgba(255,210,140,${Math.min(1, (30 + 120 * pl.level + 110 * pl.hitFlash) / 255)})`;
+  // lamp: bloom from the centre plus a spotlight drifting across the plate, both in the pitch colour
+  g.globalCompositeOperation = "lighter";
+  let gr = g.createRadialGradient(W / 2, W / 2, 0, W / 2, W / 2, W * 0.72);
+  gr.addColorStop(0, `rgba(${rgb},${(0.20 * pulse).toFixed(3)})`); gr.addColorStop(1, `rgba(${rgb},0)`);
+  g.fillStyle = gr; g.fillRect(0, 0, W, W);
+  const sx = W * (0.5 + 0.28 * Math.cos(t / 2300)), sy = W * (0.5 + 0.28 * Math.sin(t / 3100));
+  gr = g.createRadialGradient(sx, sy, 0, sx, sy, W * 0.42);
+  gr.addColorStop(0, `rgba(${rgb},${(0.26 * pl.glow).toFixed(3)})`); gr.addColorStop(1, `rgba(${rgb},0)`);
+  g.fillStyle = gr; g.fillRect(0, 0, W, W);
+  g.globalCompositeOperation = "source-over";
+  // vignette keeps the light feeling like it comes from above
+  gr = g.createRadialGradient(W / 2, W / 2, W * 0.45, W / 2, W / 2, W * 0.78);
+  gr.addColorStop(0, "rgba(0,0,0,0)"); gr.addColorStop(1, "rgba(0,0,0,.38)");
+  g.fillStyle = gr; g.fillRect(0, 0, W, W);
+  g.lineWidth = 3 + 5 * pl.hitFlash;
+  g.strokeStyle = `rgba(${rgb},${Math.min(1, 0.18 + 0.6 * pl.glow + 0.45 * pl.hitFlash).toFixed(3)})`;
   g.strokeRect(1.5, 1.5, W - 3, W - 3);
   g.restore();
-  g.fillStyle = "rgba(235,225,200,.8)"; g.font = "600 17px system-ui, sans-serif"; g.textBaseline = "top";
+
+  g.font = "600 17px system-ui, sans-serif"; g.textBaseline = "top";
   let txt;
-  if (pl.level > 0.02 && pl.top) txt = `${pl.db.toFixed(0)} dB · ${pl.freq.toFixed(0)} Hz · mode ${pl.top[0]},${pl.top[1]}`;
+  if (pl.level > 0.02 && pl.top) txt = `${noteName(pl.pitch || pl.freq)} · ${(pl.pitch || pl.freq).toFixed(0)} Hz · ${pl.db.toFixed(0)} dB · mode ${pl.top[0]},${pl.top[1]}`;
   else if (pl.useRft && pl.rftState === "building") txt = "loading…";
   else txt = ctx ? "listening…" : "";
-  g.fillText(txt, 14, 12);
-  g.fillStyle = "rgba(0,0,0,.45)"; g.fillRect(14, 40, 150, 6);
-  g.fillStyle = "rgba(226,196,140,.9)"; g.fillRect(14, 40, 150 * Math.min(pl.level, 1), 6);
+  g.fillStyle = "rgba(0,0,0,.35)"; g.fillRect(8, 6, g.measureText(txt).width + 40, 52);
+  g.fillStyle = `rgb(${rgb})`; g.beginPath(); g.arc(24, 21, 7, 0, 7); g.fill();
+  g.fillStyle = "rgba(240,232,214,.9)"; g.fillText(txt, 38, 12);
+  g.fillStyle = "rgba(0,0,0,.45)"; g.fillRect(16, 40, 150, 6);
+  g.fillStyle = `rgba(${rgb},.95)`; g.fillRect(16, 40, 150 * Math.min(pl.level, 1), 6);
+  // spill the same light onto the page around the plate
+  const st = document.documentElement.style;
+  st.setProperty("--glow", rgb); st.setProperty("--ga", pl.glow.toFixed(3));
+  if (pl.glow > 0.25) st.setProperty("color-scheme", "dark"), document.documentElement.dataset.lit = "1";
+  else if (pl.glow < 0.03) delete document.documentElement.dataset.lit;
 }
 let last = 0;
 function loop(t) {
@@ -522,7 +640,7 @@ function loop(t) {
   plate.analyse(buf);
   plate.step();
   renderSand();
-  draw();
+  draw(t);
   $("bShake").disabled = !(plate.mass > 0 && !plate.falling);
 }
 requestAnimationFrame(loop);

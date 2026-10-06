@@ -18,6 +18,17 @@ nearest plate mode on 77/80 tones against 36–45/80 for the others; the fused s
 that. (The constant-Q bank is evaluated at the mode frequencies, which favours it in this
 test.) The desktop app has a *Transforms* menu to switch each one on or off.
 
+## Light
+
+The plate is lit by the music's own colour. A pitch is transposed up by whole octaves until
+it lands in the visible band (405–810 THz is exactly one octave), then turned into RGB — so
+every pitch class has the colour it would have as light (A440 is orange-red, C4 green) and
+an octave never changes the hue. The pitch comes from the spectrum peak itself (parabolic
+interpolation, within a few cents from 55 Hz to 5 kHz), not from the plate mode it happens
+to excite. Several ringing pitches mix additively, as lights do. The colour drives a bloom, a
+drifting spotlight, shading on the sand piles, the frame glow and, on the web page, the room
+around the plate. The desktop app has a *Colour lighting* menu toggle.
+
 ## The RFT
 
 The plate listens through the Resonant Fourier Transform (L. M. Minier,

@@ -22,7 +22,8 @@ import urllib.request
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import (QActionGroup, QBrush, QColor, QFont, QFontMetrics,
-                         QImage, QLinearGradient, QPainter, QPainterPath, QPen)
+                         QImage, QLinearGradient, QPainter, QPainterPath, QPen,
+                         QRadialGradient)
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
 RATE = 44100
@@ -219,6 +220,60 @@ class Mpris:
         self._stop = True
 
 
+# ------------------------------------------------------------ colour of pitch
+# Transpose a sound frequency up by whole octaves until it lands in the visible band
+# (405-810 THz is exactly one octave), then turn that light frequency into RGB. Every
+# pitch class gets the colour it would have if the note were light: A440 is orange-red,
+# C4 is green, and an octave up or down never changes the hue.
+def wavelength_rgb(w):
+    r = g = b = 0.0
+    if w < 440: r, b = (440 - w) / 60, 1.0
+    elif w < 490: g, b = (w - 440) / 50, 1.0
+    elif w < 510: g, b = 1.0, (510 - w) / 20
+    elif w < 580: r, g = (w - 510) / 70, 1.0
+    elif w < 645: r, g = 1.0, (645 - w) / 65
+    else: r = 1.0
+    k = (0.35 + 0.65 * (w - 380) / 40 if w < 420
+         else 0.35 + 0.65 * (750 - w) / 50 if w > 700 else 1.0)
+    return (np.array([r, g, b]) * k) ** 0.8
+
+
+def pitch_color(f):
+    fl = f * 2.0 ** 40
+    while fl < 405e12: fl *= 2
+    while fl >= 810e12: fl /= 2
+    return wavelength_rgb(min(max(299792458 / fl * 1e9, 380), 750))
+
+
+NOTES = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"]
+
+
+def note_name(f):
+    x = 12 * math.log2(f / 440) + 69
+    n = round(x)
+    c = round((x - n) * 100)
+    return f"{NOTES[n % 12]}{n // 12 - 1}" + (f" {c:+d}¢" if abs(c) >= 5 else "")
+
+
+def interp(spec, k):
+    """Parabolic peak interpolation on log magnitudes -> frequency in Hz."""
+    a, b, c = (math.log(float(spec[k + j]) + 1e-12) for j in (-1, 0, 1))
+    d = 0.5 * (a - c) / (a - 2 * b + c)
+    return (k + min(max(d, -0.5), 0.5)) * RATE / FFT_N
+
+
+def peak_near(spec, f0, span, floor):
+    """Strongest genuine local maximum within +-span of f0 (0 if none)."""
+    df = RATE / FFT_N
+    lo = max(2, int(f0 * (1 - span) / df))
+    hi = min(len(spec) - 3, math.ceil(f0 * (1 + span) / df))
+    k = -1
+    for i in range(lo, hi + 1):
+        if spec[i] > spec[i - 1] and spec[i] >= spec[i + 1] and (k < 0 or spec[i] > spec[k]):
+            k = i
+    return 0.0 if k < 0 or spec[k] < floor or spec[k] < 1e-6 else interp(spec, k)
+
+
 # ----------------------------------------------------------------------- RFT
 # Resonant Fourier Transform (Minier, "What I Got Wrong", Eqs. 1-2):
 #   f_k = {(k+1) phi},  Phi_nk = N^-1/2 exp(i 2 pi f_k n),  U = Phi (Phi^H Phi)^-1/2
@@ -263,10 +318,11 @@ class Bank:
         self.sprev = np.zeros(len(fshort), dtype=np.float32)
         self.fluxnorm = fluxnorm
         self.ref = -60.0       # this transform's own loudness reference
+        self.spec = None       # latest magnitudes (the lamp reads true pitch off these)
 
     def db(self, s):
         """dB in each plate mode's band (long window), plus the spectral peak."""
-        spec = self.long(s)
+        spec = self.spec = self.long(s)
         cs = np.concatenate(([0.0], np.cumsum(spec.astype(np.float64) ** 2)))
         e = np.sqrt((cs[self.hi] - cs[self.lo]) / (self.hi - self.lo))
         return (20 * np.log10(e + 1e-9),
@@ -412,6 +468,36 @@ class Plate:
         self.last_hit = 0.0
         self.freq = 0.0
         self.top_mode = None
+        self.light = np.array([0.89, 0.77, 0.55])   # lamp colour: additive mix of ringing pitches
+        self.glow = 0.0                              # lamp brightness
+        self.pitch = 0.0                             # true pitch of the strongest mode, Hz
+
+    def true_pitch(self, spec, i):
+        """Pitch actually heard near mode i; if nothing real is near it (the plate
+        has no resonance there), the strongest tone anywhere in the spectrum."""
+        if spec is None:
+            return float(self.mf[i])
+        df = RATE / FFT_N
+        lo, hi = max(2, math.ceil(35 / df)), min(len(spec) - 3, int(7500 / df))
+        gk = lo + int(np.argmax(spec[lo:hi + 1]))
+        return (peak_near(spec, self.mf[i], 0.12, 0.3 * float(spec[gk]))
+                or interp(spec, gk))
+
+    def update_light(self):
+        spec = self.banks["FFT"].spec if self.on["FFT"] else None
+        act = np.nonzero(self.amp > 0.05)[0]
+        if len(act):
+            act = act[np.argsort(self.amp[act])[::-1][:3]]
+            acc = np.zeros(3)
+            for n, i in enumerate(act):
+                fp = self.true_pitch(spec, i)
+                if n == 0:
+                    self.pitch = fp
+                acc += self.amp[i] ** 2 * pitch_color(fp)
+            if acc.max() > 0:
+                self.light += (acc / acc.max() - self.light) * 0.18
+        gt = 0.3 + 0.7 * self.level if self.level > 0.02 else 0.0
+        self.glow += (gt - self.glow) * 0.2
 
     def _load_rft(self):
         try:
@@ -501,6 +587,7 @@ class Plate:
         self.amp += (tgt - self.amp) * np.where(tgt > self.amp, 0.6, 0.07)
         self.amp[self.amp < 0.003] = 0
         self._build_field()
+        self.update_light()
 
     def _build_field(self):
         act = np.nonzero(self.amp > 0.02)[0]
@@ -622,14 +709,7 @@ class Widget(QWidget):
 
         self.plate = Plate()
         self.img = QImage(GRID, GRID, QImage.Format.Format_ARGB32)
-        self.sand = np.array([226, 196, 140], dtype=np.float32)
-        # colour lookup: sand density -> BGRA, one gather per frame
-        base = np.array([26, 29, 36], dtype=np.float32)
-        v = 1 - np.exp(-np.arange(64, dtype=np.float32) / 2 * 0.9)
-        col = base + (self.sand - base) * v[:, None]
-        self.lut = np.empty((64, 4), dtype=np.uint8)
-        self.lut[:, 0], self.lut[:, 1], self.lut[:, 2] = col[:, 2], col[:, 1], col[:, 0]
-        self.lut[:, 3] = 255
+        self.lighting = True
         self.status = ""
         self.btn = {}
         self.bar_rect = QRectF()
@@ -657,13 +737,37 @@ class Widget(QWidget):
     def on_fail(self, msg):
         self.status = msg
 
+    # ----- lighting
+    def lamp(self):
+        """(r, g, b in 0..255, brightness 0..1): the pitch colour, or plain warm light."""
+        if not self.lighting:
+            return (226, 196, 140), min(1.0, self.plate.level)
+        return tuple(int(c * 255) for c in self.plate.light), self.plate.glow
+
+    def lit_sand(self, d):
+        """Sand density -> BGRA, tinted by the lamp and shaded from the upper left."""
+        (lr, lg, lb), glow = self.lamp()
+        L = np.array([lr, lg, lb], dtype=np.float32)
+        sand = np.array([226, 196, 140], dtype=np.float32) * 0.4 + L * 0.6
+        base = np.array([26, 29, 36], dtype=np.float32) + L * (0.03 + 0.13 * glow)
+        v = 1 - np.exp(-np.arange(64, dtype=np.float32) / 2 * 0.9)
+        lut = base + (sand - base) * v[:, None]
+        idx = np.minimum((d * 2).astype(np.int32), 63)
+        gx = np.zeros_like(d); gy = np.zeros_like(d)
+        gx[:, 1:-1] = d[:, 2:] - d[:, :-2]
+        gy[1:-1] = d[2:] - d[:-2]
+        shade = np.where(idx > 0, np.clip(1 + 0.09 * (gx + gy), 0.6, 1.5), 1.0)
+        rgb = np.clip(lut[idx] * shade[..., None], 0, 255)
+        out = np.empty((GRID, GRID, 4), dtype=np.uint8)
+        out[..., 0], out[..., 1], out[..., 2], out[..., 3] = rgb[..., 2], rgb[..., 1], rgb[..., 0], 255
+        return out
+
     # ----- frame
     def tick(self):
         self.plate.analyse(self.audio.buf)
         self.plate.step()
         d = self.plate.render()
-        rgb = self.lut[np.minimum((d * 2).astype(np.int32), 63)]
-        self.frame = rgb
+        self.frame = self.lit_sand(d)
         self.img = QImage(self.frame.data, GRID, GRID, GRID * 4,
                           QImage.Format.Format_ARGB32)
         # pick up newly fetched cover art
@@ -688,6 +792,11 @@ class Widget(QWidget):
         u = W / 360.0
         margin = 8
         outer = QRectF(margin, margin, W - 2 * margin, W - 2 * margin)
+        (lr, lg, lb), glow_k = self.lamp()
+        for i in range(1, 7):                   # light spilling past the frame
+            p.setPen(QPen(QColor(lr, lg, lb, int(80 * glow_k / i)), 1.5))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(outer.adjusted(-i, -i, i, i), 18 + i, 18 + i)
         grad = QLinearGradient(outer.topLeft(), outer.bottomRight())
         grad.setColorAt(0, QColor(92, 98, 110))
         grad.setColorAt(1, QColor(40, 44, 52))
@@ -699,13 +808,34 @@ class Widget(QWidget):
         clip.addRoundedRect(inner, 8, 8)
         p.setClipPath(clip)
         p.drawImage(inner, self.img)
-        p.setClipping(False)
         pl = self.plate
+        pulse = glow_k * 0.5 + 0.5 * pl.hit_flash
+        # lamp: bloom from the centre plus a spotlight drifting across the plate,
+        # both in the pitch colour, then a vignette
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
+        c, wd = inner.center(), inner.width()
+        rg = QRadialGradient(c, wd * 0.72)
+        rg.setColorAt(0, QColor(lr, lg, lb, int(255 * 0.20 * pulse)))
+        rg.setColorAt(1, QColor(lr, lg, lb, 0))
+        p.fillRect(inner, QBrush(rg))
+        t = time.monotonic() * 1000
+        sp = QPointF(c.x() + wd * 0.28 * math.cos(t / 2300),
+                     c.y() + wd * 0.28 * math.sin(t / 3100))
+        rg = QRadialGradient(sp, wd * 0.42)
+        rg.setColorAt(0, QColor(lr, lg, lb, int(255 * 0.26 * glow_k)))
+        rg.setColorAt(1, QColor(lr, lg, lb, 0))
+        p.fillRect(inner, QBrush(rg))
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        rg = QRadialGradient(c, wd * 0.78)
+        rg.setColorAt(0.58, QColor(0, 0, 0, 0))
+        rg.setColorAt(1, QColor(0, 0, 0, 97))
+        p.fillRect(inner, QBrush(rg))
+        p.setClipping(False)
         if pl.falling and pl.fall_t < 16:      # visible jolt of the whole plate
             p.translate(np.random.uniform(-2, 2) * u, np.random.uniform(-2, 2) * u)
-        glow = QColor(255, 210, 140,
-                      min(255, int(30 + 120 * pl.level + 110 * pl.hit_flash)))
-        p.setPen(QPen(glow, 1.5 + 2.0 * pl.hit_flash))
+        glow = QColor(lr, lg, lb, min(255, int(255 * (0.18 + 0.6 * glow_k
+                                                      + 0.45 * pl.hit_flash))))
+        p.setPen(QPen(glow, 1.5 + 2.5 * pl.hit_flash))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(inner, 8, 8)
 
@@ -716,13 +846,19 @@ class Widget(QWidget):
             if self.status:
                 txt = self.status
             elif pl.level > 0.02 and pl.top_mode:
-                txt = (f"{pl.db:4.0f} dB · {pl.freq:5.0f} Hz "
+                hz = pl.pitch or pl.freq
+                txt = (f"{note_name(hz)} · {hz:.0f} Hz · {pl.db:.0f} dB "
                        f"· mode {pl.top_mode[0]},{pl.top_mode[1]}")
             elif pl.on["RFT"] and pl.rft_state == "building":
                 txt = "building RFT (first run only)…"
             else:
                 txt = "listening…"
-            p.drawText(QRectF(inner.left() + 8, inner.top() + 4, 260 * u, 20),
+            p.save()
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(lr, lg, lb))
+            p.drawEllipse(QPointF(inner.left() + 14 * u, inner.top() + 12 * u), 4 * u, 4 * u)
+            p.restore()
+            p.drawText(QRectF(inner.left() + 24 * u, inner.top() + 4, 260 * u, 20),
                        Qt.AlignmentFlag.AlignLeft, txt)
 
         # dB meter: how hard the system is driving the plate
@@ -730,7 +866,7 @@ class Widget(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(0, 0, 0, 110))
         p.drawRoundedRect(QRectF(inner.left() + 8, my, mw, 4 * u), 2, 2)
-        p.setBrush(QColor(226, 196, 140, 230))
+        p.setBrush(QColor(lr, lg, lb, 230))
         p.drawRoundedRect(QRectF(inner.left() + 8, my, mw * min(pl.level, 1), 4 * u), 2, 2)
         self.btn = {}
         # shake-off button (top-right of the plate)
@@ -932,6 +1068,7 @@ class Widget(QWidget):
         for text, attr, cb in (
                 ("Show player panel", "show_player", self.toggle_player),
                 ("Show frequency label", "show_label", None),
+                ("Colour lighting", "lighting", None),
                 ("Always on top", "always_on_top", self.set_on_top)):
             act = menu.addAction(text)
             act.setCheckable(True)
