@@ -27,15 +27,13 @@ const base = process.env.CYMANTIX_URL || 'http://127.0.0.1:8765/';
       assert(result.energy > 0 && result.level > .1, `${frequency} Hz must move sand`);
       results.push({inputHz: frequency, measuredHz: +result.frequency.toFixed(2)});
     }
-    // Sensitivity changes the analysis path only, and quieter-than-threshold input stays still.
+    // Quiet recordings automatically recover after a loud passage, without playback gain.
+    assert(await page.locator('#sensitivity, #noiseFloor').count() === 0, 'Manual sensitivity controls must be removed');
     await page.evaluate(() => { toneOsc.frequency.setValueAtTime(440, ctx.currentTime); srcNode.gain.value = 1e-5; });
+    await page.waitForFunction(() => plate.level > .1 && Math.abs(wideband.pitch - 440) < 10 && wideband.rms < .00001, null, {timeout: 10000});
+    assert(await page.evaluate(() => inputGain.gain.value === 1 && srcNode.gain.value < .000011), 'Auto response must not amplify playback');
+    await page.evaluate(() => { srcNode.gain.value = 0; });
     await page.waitForFunction(() => plate.level < .01, null, {timeout: 10000});
-    assert(await page.evaluate(() => plate.level < .01), 'Sub-threshold input should settle');
-    await page.locator('#sensitivity').evaluate(el => { el.value = '36'; el.dispatchEvent(new Event('input')); });
-    await page.waitForTimeout(1000);
-    assert(await page.evaluate(() => plate.level > .1), 'Gain should reveal quiet input');
-    assert(await page.evaluate(() => srcNode.gain.value < .000011), 'Analysis gain must not amplify playback');
-    await page.locator('#sensitivity').evaluate(el => { el.value = '0'; el.dispatchEvent(new Event('input')); });
     // Anti-phase stereo cancels in mono: both channels must still be detected and excite the plate.
     await page.evaluate(() => {
       const oscillator = ctx.createOscillator(), left = ctx.createGain(), right = ctx.createGain(), merge = ctx.createChannelMerger(2);
@@ -97,6 +95,6 @@ const base = process.env.CYMANTIX_URL || 'http://127.0.0.1:8765/';
     await fallback.waitForTimeout(1500);
     assert(await fallback.evaluate(()=>!plate.gpu && plate.level>.1 && plate.rftState==='failed'), 'CPU/FFT fallback should work');
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({status:'PASS', toneSweep:results, checks:['GPU render','20 Hz–20 kHz sweep','quiet input and gain','anti-phase stereo','stop/reset','2 ms burst retention','microphone release','square/circular demo','file playback','390/768/1440px layout','CPU and missing-RFT fallback'], pageErrors:errors},null,2));
+    console.log(JSON.stringify({status:'PASS', toneSweep:results, checks:['GPU render','20 Hz–20 kHz sweep','automatic quiet-input response and silence','anti-phase stereo','stop/reset','2 ms burst retention','microphone release','square/circular demo','file playback','390/768/1440px layout','CPU and missing-RFT fallback'], pageErrors:errors},null,2));
   } finally { await browser.close(); }
 })().catch(error=>{console.error(error);process.exitCode=1;});

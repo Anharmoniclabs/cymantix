@@ -25,8 +25,9 @@ Audio is processed locally in the browser.
   between visual frames, including short bursts. Frame-sample metering is used
   if worklets are unavailable. This is continuous level capture, not a recording
   or a claim to resolve every frequency in every short transient.
-- **Adjustable sensitivity and response threshold.** Analysis gain is separate
-  from playback volume. Microphone capture requests echo cancellation, noise
+- **Automatic input matching.** A relative spectral floor and fast-attack,
+  recovering loudness reference follow quiet and loud recordings without manual
+  sensitivity or threshold controls. Playback gain stays unchanged. Microphone capture requests echo cancellation, noise
   suppression, and automatic gain control off; hardware/browser support varies.
 - **Distinct measurements:** dominant frequency, digital input level (dBFS),
   and excited plate resonance. The square dataset has 128 modes from about
@@ -54,7 +55,7 @@ node tools/verify-web.cjs
 `CYMANTIX_URL` can select a different local server;
 `CHROMIUM_EXECUTABLE_PATH` can select an installed Chromium binary.
 The test exercises real Web Audio with generated tones, stereo cancellation,
-short-burst capture, input gain, microphone release using a synthetic device,
+short-burst capture, automatic quiet-input response, microphone release using a synthetic device,
 file playback, plate shapes, mobile widths, and CPU/missing-RFT fallback.
 It does not validate the frequency response of a physical microphone.
 

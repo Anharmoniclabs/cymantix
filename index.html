@@ -32,11 +32,7 @@
       <audio id="player" controls hidden></audio>
       <div class="tone-controls" id="toneControls" hidden><label class="control" for="tone">Frequency <output id="toneValue">440 Hz</output></label><input id="tone" type="range" min="0" max="1000" step="0.01" value="447.47" aria-label="Test tone frequency"><p class="hint">20 Hz–20 kHz test signal. Playback volume starts low.</p></div>
       <p class="status" id="st" role="status">Choose a source. Audio is processed on your device.</p>
-      <label class="control" for="sensitivity">Input sensitivity <output id="sensitivityValue">+0 dB</output></label>
-      <input id="sensitivity" type="range" min="0" max="36" step="1" value="0">
-      <label class="control" for="noiseFloor">Response threshold <output id="noiseFloorValue">−78 dBFS</output></label>
-      <input id="noiseFloor" type="range" min="-100" max="-30" step="1" value="-78">
-      <p class="hint">Lower the threshold for quieter sounds. Raise it if room noise keeps the sand moving.</p>
+      <p class="hint">Automatically follows the level and frequencies of your selected audio.</p>
     </section>
     <section class="panel">
       <h2>Live spectrum</h2>
@@ -84,10 +80,9 @@ function ensureCtx() {
   analyser.fftSize = FFT_N;
   outGain = ctx.createGain();
   inputGain = ctx.createGain();
-  inputGain.gain.value = 10 ** (Number($('sensitivity').value) / 20);
+  inputGain.gain.value = 1;
   inputGain.connect(analyser);
   wideband = new WidebandAudio(ctx, inputGain);
-  wideband.floor = Number($('noiseFloor').value);
   // Keep the analysis graph running through a silent output.
   analyser.connect(outGain);
   outGain.connect(ctx.destination);
@@ -99,7 +94,7 @@ function useSource(node, audible, stop) {
   if (srcNode) try { srcNode.disconnect(); } catch (e) {}
   srcNode = node;
   node.connect(inputGain);
-  // Route playback directly: sensitivity must never make playback louder.
+  // Keep playback independent of automatic visual normalization.
   outGain.gain.value = 0;
   if (audible) node.connect(ctx.destination);
   wideband.reset(); plate.clearAudio();
@@ -204,11 +199,6 @@ $('fileInput').onchange = async event => {
 };
 $('player').onended = () => { setStatus('File finished. Press play to listen again.'); };
 $('player').onerror = () => setStatus('This audio file could not be decoded. Try MP3, WAV, or another supported audio format.');
-$('sensitivity').oninput = event => {
-  const db = Number(event.target.value); $('sensitivityValue').textContent = '+' + db + ' dB';
-  inputGain?.gain.setTargetAtTime(10 ** (db / 20), ctx.currentTime, 0.03);
-};
-$('noiseFloor').oninput = event => { $('noiseFloorValue').textContent = event.target.value + ' dBFS'; if (wideband) wideband.floor = Number(event.target.value); };
 $('sandAmount').oninput = event => { sandAmount = Number(event.target.value) / 100; $('sandAmountValue').textContent = event.target.value + '%'; if (!plate.falling) plate.mass = sandAmount; };
 $('bReset').onclick = () => plate.reset();
 if (!navigator.mediaDevices?.getDisplayMedia) { $('bTab').disabled = true; $('bTab').title = 'Tab capture is not supported in this browser. Use a file or microphone.'; }
@@ -601,7 +591,7 @@ class Plate {
     this.E = new Float32Array(FG * FG); this.EX = new Float32Array(FG * FG); this.EY = new Float32Array(FG * FG);
     this.p = new Float32Array(GRAINS * 2);
     this.bflux = [1, 1, 1]; this.blast = [-99, -99, -99];
-    this.frame = 0; this.tick = 0; this.db = -90; this.dbRef = -40;
+    this.frame = 0; this.tick = 0; this.db = -90; this.dbRef = -110;
     this.level = 0; this.hit = 0; this.hitFlash = 0; this.freq = 0; this.top = null;
     this.light = [0.89, 0.77, 0.55]; this.glow = 0; this.pitch = 0;       // backdrop colour (additive mix of ringing pitches) and brightness
     this.useRft = true; this.rftState = "building";
@@ -642,7 +632,7 @@ class Plate {
     this.amp.fill(0); this.ts.fill(0); this.hold.fill(0);
     this.E.fill(0); this.EX.fill(0); this.EY.fill(0);
     this.level = this.hit = this.pitch = this.freq = 0; this.top = null; this.tuned = false;
-    this.db = -120; this.dbRef = -40;
+    this.db = -120; this.dbRef = -110;
     this.bflux = [1, 1, 1]; this.blast = [-99, -99, -99];
     for (const bank of Object.values(this.banks)) { bank.ref = -60; bank.last = null; bank.sprev?.fill(0); }
   }
@@ -651,8 +641,11 @@ class Plate {
     let ss = 0; for (let i = FFT_N - 2048; i < FFT_N; i++) ss += samples[i] * samples[i];
     const rms = Math.max(Math.sqrt(ss / 2048), wideband?.rms || 0, (wideband?.block || 0) * 0.5), db = 20 * Math.log10(rms + 1e-9);
     this.db += (db - this.db) * (db > this.db ? 0.6 : 0.12);
-    const silent = db < Number($('noiseFloor').value);
-    if (silent) this.dbRef -= 0.2; else this.dbRef = Math.max(db, this.dbRef - 0.04, -60);
+    const silent = db < (wideband?.signalFloor ?? -110);
+    const now = performance.now(), elapsed = Math.min(0.25, (now - (this.lastAnalysisAt ?? now)) / 1000);
+    this.lastAnalysisAt = now;
+    // Follow sudden increases immediately and quieter passages without manual gain.
+    if (!silent) this.dbRef = Math.max(db, this.dbRef - 24 * elapsed, -110);
     const drive = silent ? 0 : clamp((db - (this.dbRef - 40)) / 40, 0, 1);
     this.level += (drive - this.level) * (drive > this.level ? 0.7 : 0.08);
     this.hit = Math.max(this.hit * 0.86, silent ? 0 : (wideband?.flux || 0)); this.hitFlash *= 0.9;
@@ -895,14 +888,14 @@ function drawReadouts(t) {
   if (t-lastReadout < 100) return; lastReadout=t;
   const active = !!srcNode || bow.down;
   const db = wideband ? 20*Math.log10(wideband.rms+1e-12) : -120;
-  const audible = active && db >= Number($('noiseFloor').value);
+  const audible = active && db >= (wideband?.signalFloor ?? -110);
   $('pitchReadout').textContent = audible && wideband?.pitch ? wideband.pitch.toLocaleString(undefined,{maximumFractionDigits:1})+' Hz' : '— Hz';
   $('levelReadout').textContent = active ? Math.max(-120,db).toFixed(1)+' dBFS' : '— dBFS';
   $('modeReadout').textContent = audible && plate.freq ? Math.round(plate.freq).toLocaleString()+' Hz' : '— Hz';
   $('meterFill').style.width = (active ? clamp((db+90)/90,0,1)*100 : 0)+'%';
   const clipping = active && (wideband?.peak || 0) >= .99;
   $('meter').classList.toggle('clip', clipping);
-  $('signalState').textContent = !active ? 'No input' : clipping ? 'Near full scale · lower gain' : audible ? 'Signal detected' : 'Below response threshold';
+  $('signalState').textContent = !active ? 'No input' : clipping ? 'Near full scale' : audible ? 'Signal detected' : 'Waiting for sound';
   $('audioInfo').textContent = ctx ? (RATE/1000).toFixed(1)+' kHz · '+(wideband?.meterState === 'continuous' ? 'continuous meter' : 'frame meter') : '20 Hz–20 kHz analysis';
   $('maxFrequency').textContent = ((wideband?.ceiling || 20000)/1000).toFixed(0)+'k';
   $('grainLabel').textContent = Math.floor(plate.mass*(plate.gpu ? GPU_N : GRAINS)).toLocaleString()+' grains';

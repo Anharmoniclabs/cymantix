@@ -4,7 +4,8 @@ class WidebandAudio {
   constructor(context, input) {
     this.context = context;
     this.ceiling = Math.min(20000, context.sampleRate / 2);
-    this.floor = -78;
+    this.floor = -125;
+    this.signalFloor = -110;
     this.values = new Float32Array(96).fill(-120);
     this.previous = new Float32Array(96).fill(-120);
     this.bands = Array.from({length: 96}, (_, i) => [
@@ -53,6 +54,9 @@ class WidebandAudio {
       for (const x of samples) { sum += x*x; peak = Math.max(peak, Math.abs(x)); }
       this.rms = Math.sqrt(sum / samples.length); this.peak = peak; this.block = this.rms;
     }
+    // A relative spectral floor follows quiet and loud recordings without altering playback.
+    const level = 20 * Math.log10(Math.max(this.rms, this.block * 0.5, 1e-12));
+    this.floor = Math.max(-125, Math.min(-60, level - 48));
     for (const channel of this.channels) for (const ear of channel) ear.node.getFloatFrequencyData(ear.data);
     const waiting = this.context.currentTime < (this.validAfter || 0);
     let flux = 0, bass = 0, mid = 0, air = 0, strongest = -120, pitch = 0;
