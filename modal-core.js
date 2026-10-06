@@ -3,7 +3,7 @@
 (function(root) {
   'use strict';
   const material = Object.freeze({youngPa: 200e9, densityKgM3: 7850, thicknessM: .001, poisson: .3,
-    frequencyScaleHz: 5.5, dampingRatio: .015, forceNPerFullScale: .1, gravity: 9.80665});
+    frequencyScaleHz: 5.5, dampingRatio: .03, forceNPerFullScale: .1, gravity: 9.80665});
   const rigidity = material.youngPa * material.thicknessM ** 3 / (12 * (1-material.poisson**2));
   const sideM = Math.sqrt(Math.sqrt(rigidity/(material.densityKgM3*material.thicknessM))/(2*Math.PI*material.frequencyScaleHz));
   function coefficients(frequency, rate, gain, damping=material.dampingRatio) {
@@ -29,7 +29,10 @@
         const p=this.coefficients[i],q=this.q[i],v=this.v[i];
         const nextQ=p.a*q+p.b*v+p.forceQ*input, nextV=p.c*q+p.d*v+p.forceV*input;
         this.q[i]=nextQ; this.v[i]=nextV;
-        const acceleration=p.gain*input-2*p.decay*nextV-p.omega*p.omega*nextQ;
+        // Resonant acceleration amplitude w*v. At resonance it equals the full modal acceleration;
+        // off resonance it falls on both sides, whereas total q-ddot is dominated by the broadband
+        // force/mass term and lets the lowest modes win regardless of pitch.
+        const acceleration=p.omega*nextV;
         this.acceleration[i]=acceleration;
         this.energy[i]+=acceleration*acceleration; this.displacement[i]+=nextQ*nextQ;
       }

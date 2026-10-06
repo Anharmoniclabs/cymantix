@@ -593,6 +593,7 @@ class Plate {
     this.pendingReport = null; this.lastReport = report;
     this.db = 20 * Math.log10(report.rms + 1e-12);
     this.banks.FFT?.db(samples);
+    this.autoTune(report);
     let peak = 0;
     for (let i=0;i<this.amp.length;i++) { this.amp[i] = Math.sqrt(report.energy[i]) / VirtualPlate.material.gravity; peak = Math.max(peak,this.amp[i]); }
     // Display meter only; the field keeps absolute acceleration squared, with no AGC.
@@ -630,6 +631,31 @@ class Plate {
     // brightness follows the average loudness slowly and tops out low: no beat-synced flicker
     const gt = this.level > 0.02 ? 0.35 + 0.35 * this.level : 0;
     this.glow += (gt - this.glow) * 0.012;
+  }
+
+  autoTune(report) {
+    // A real plate is tuned by its tension or size. Here the whole mode set is scaled so the
+    // dominant sustained pitch sits on a well-coupled resonance; otherwise the five modes below
+    // 200 Hz would answer every bass note and chord the same way. Physics per mode is unchanged.
+    const spec = this.banks.FFT?.spec, model = physicalModel;
+    if (!spec || !model || !model.node || !this.set.physical) return;
+    const df = RATE / FFT_N, lo = Math.max(2, Math.ceil(35 / df)), hi = Math.min(spec.length - 3, Math.floor(7500 / df));
+    let gk = lo; for (let j = lo; j <= hi; j++) if (spec[j] > spec[gk]) gk = j;
+    if (report.rms < 3e-4 || spec[gk] < 1e-6) { this.tuneCount = 0; return; }
+    const P = interp(spec, gk);
+    if (Math.abs(Math.log2(P / (this.tuneP || 1))) < .02) this.tuneCount = (this.tuneCount || 0) + 1;
+    else { this.tuneP = P; this.tuneCount = 0; }
+    const now = performance.now();
+    if (this.tuneCount < 8 || now - (this.tuneAt || 0) < 500) return;
+    const base = this.set.f, scale = model.scale; let near = Infinity, pick = -1, pickErr = Infinity;
+    for (let i = 0; i < base.length; i++) {
+      if (this.drive[i] < .12) continue;                    // the actuator must couple to the mode
+      near = Math.min(near, Math.abs(Math.log(P / (base[i] * scale))));
+      const move = Math.abs(Math.log(P / base[i]));
+      if (move < pickErr && P / base[i] > .6 && P / base[i] < 1.7) { pickErr = move; pick = i; }
+    }
+    if (near < .02 || pick < 0) return;                    // already on a resonance, or nothing to tune
+    this.tuneAt = now; model.retune(P / base[pick]);
   }
 
   buildField(report) {

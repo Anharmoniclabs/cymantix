@@ -1,7 +1,7 @@
 // Browser bridge between physical mode shapes and the continuous audio-rate solver.
 class PhysicalPlateModel {
   constructor(context, input, receive, fail) {
-    this.context=context;this.input=input;this.receive=receive;this.fail=fail;this.revision=0;
+    this.context=context;this.input=input;this.receive=receive;this.fail=fail;this.revision=0;this.scale=1;
     this.ready=this.start();
   }
   async start() {
@@ -19,7 +19,9 @@ class PhysicalPlateModel {
       if(this.set)this.configure(this.set);
     } catch(error) {this.fail('Continuous plate simulation is unavailable: '+error.message);}
   }
+  retune(scale) {this.scale=scale;this.configure(this.set);}
   configure(set) {
+    if(set!==this.set)this.scale=1;
     this.set=set;this.revision++;
     if(!this.node || !set.physical)return;
     const {material,sideM}=VirtualPlate, grid=Math.sqrt(set.W.length/set.f.length);
@@ -28,14 +30,15 @@ class PhysicalPlateModel {
     // Bilinear actuator location in the same cell-centred grid as the mode data.
     const x=.37*grid-.5,y=.31*grid-.5,ix=Math.floor(x),iy=Math.floor(y),tx=x-ix,ty=y-iy;
     for(let i=0;i<set.f.length;i++) {
-      if(set.f[i]>=this.context.sampleRate/2)continue;
+      const frequency=set.f[i]*this.scale;
+      if(frequency>=this.context.sampleRate/2)continue;
       const offset=i*grid*grid;let integral=0;
       for(let k=0;k<grid*grid;k++)integral+=set.W[offset+k]**2;
       const at=(xx,yy)=>set.W[offset+yy*grid+xx];
       const drive=(1-ty)*((1-tx)*at(ix,iy)+tx*at(ix+1,iy))+ty*((1-tx)*at(ix,iy+1)+tx*at(ix+1,iy+1));
       const mass=material.densityKgM3*material.thicknessM*cellArea*integral;
       if(!(mass>0))throw new Error('Non-positive modal mass');
-      frequencies.push(set.f[i]);gains.push(material.forceNPerFullScale*drive/mass);weights.push(integral/(grid*grid));this.indices.push(i);
+      frequencies.push(frequency);gains.push(material.forceNPerFullScale*drive/mass);weights.push(integral/(grid*grid));this.indices.push(i);
     }
     this.node.port.postMessage({type:'configure',revision:this.revision,frequencies,gains,weights});
   }
