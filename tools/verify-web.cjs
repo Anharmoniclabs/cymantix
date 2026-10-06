@@ -13,8 +13,9 @@ const {chromium} = require('playwright');
     assert.equal(await page.locator('input').count(),0);
     assert(await page.evaluate(()=>!!plate.gpu && cv.width===1024 && plate.gpu.canvas.width===1024));
     await page.click('#bDemo');
-    await page.waitForTimeout(1200);
-    assert(await page.evaluate(()=>plate.level>.1 && plate.mass>0));
+    await page.waitForTimeout(1500);
+
+    assert(await page.evaluate(()=>plate.lastReport && plate.lastReport.rms>0 && Math.max(...plate.E)>0 && plate.mass>0));
     await page.evaluate(()=>{
       const tone=ctx.createOscillator(), gain=ctx.createGain();tone.frequency.value=440;gain.gain.value=.035;
       tone.connect(gain);tone.start();useSource(gain,true,()=>tone.stop());plate.reset();plate.mass=.65;
@@ -23,13 +24,14 @@ const {chromium} = require('playwright');
     assert(await page.evaluate(()=>plate.hit<.1 && Math.abs(plate.pitch-440)<10));
     await page.screenshot({path:'/tmp/cymantix-refined-original.png',fullPage:true});
     await page.click('#bShape');
-    await page.waitForFunction(()=>plate.shape==='circle');
+    await page.waitForFunction(()=>plate.shape==='circle' && plate.lastReport?.energy.length===plate.mf.length && plate.mass>0);
+    assert(await page.evaluate(()=>Math.abs(plate.mf[0]-224.748)<.1), 'Clamped circular fundamental');
     await page.click('#bShake');
     assert(await page.evaluate(()=>plate.falling));
     await page.setViewportSize({width:390,height:844});
     assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     await page.goto(base+'?cpu');await page.click('#bDemo');await page.waitForTimeout(1000);
-    assert(await page.evaluate(()=>!plate.gpu && plate.level>.1));
+    assert(await page.evaluate(()=>!plate.gpu && plate.lastReport && Math.max(...plate.E)>0));
     assert.deepEqual(errors,[]);
     console.log('PASS: original four controls, no inputs, HD GPU, demo, stable tone, circular plate, shake, mobile, CPU fallback.');
   } finally {await browser.close();}

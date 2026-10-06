@@ -64,14 +64,18 @@
 
   <details>
     <summary>What am I looking at?</summary>
-    <p>A virtual square plate has resonant modes
-       φ = cos(nπx)cos(mπy) − s·cos(mπx)cos(nπy) at f ≈ F₀(n²+m²). Each mode is
-       driven by the sound energy near its own resonance, and the sand slides toward the
-       nodal lines, as on a real Chladni plate. Loudness (dB) sets how hard the plate is driven.</p>
+    <p>Incoming audio drives a fixed point on a modeled 1 mm steel plate. Each retained
+       mode follows a damped equation of motion at the audio sample rate. HD grains
+       migrate toward regions with lower time-averaged acceleration.</p>
+    <p>The square has free edges; the circular plate has a clamped edge. This is a
+       numerically defined virtual plate, not a measurement of a physical one.
+       The sand transport is approximate. <a href="MODEL.md">Model, limits &amp; verification</a>.</p>
     <p><a href="https://github.com/Anharmoniclabs/cymantix">Source &amp; desktop app</a></p>
   </details>
 </div>
 
+<script src="modal-core.js"></script>
+<script src="plate-model.js"></script>
 <script>
 "use strict";
 // ============================================================ constants
@@ -84,6 +88,7 @@ const randn = () => (Math.random() + Math.random() + Math.random() - 1.5) * 2;  
 
 // ============================================================ audio graph
 let ctx = null, analyser = null, outGain = null, srcNode = null, stopSrc = null;
+let physicalModel = null;
 const buf = new Float32Array(FFT_N);
 let RATE = 44100;
 
@@ -97,12 +102,19 @@ function ensureCtx() {
   analyser.connect(outGain);
   outGain.connect(ctx.destination);
   plate.setRate(RATE);
+  physicalModel = new PhysicalPlateModel(ctx, analyser, report => { plate.pendingReport = report; }, message => {
+    plate.pendingReport = null; plate.E.fill(0); plate.EX.fill(0); plate.EY.fill(0); plate.level = 0;
+    plate.solverFailed = true; setStatus(message);
+  });
+  physicalModel.configure(plate.set);
 }
 function useSource(node, audible, stop) {
   if (stopSrc) stopSrc();
   stopSrc = stop || null;
   if (srcNode) try { srcNode.disconnect(); } catch (e) {}
   srcNode = node;
+  physicalModel?.configure(plate.set);
+  plate.pendingReport = null;
   node.connect(analyser);
   outGain.gain.value = audible ? 1 : 0;      // captured tab must not echo back
 }
@@ -140,7 +152,7 @@ async function startTab() {
       s.getTracks().forEach(t => t.stop());
       setStatus("No audio shared. Pick a tab and tick “Share tab audio”."); return;
     }
-    s.getVideoTracks().forEach(t => t.stop());
+    // Keep the share session alive; all capture tracks are released on source replacement.
     mark("bTab");
     useSource(ctx.createMediaStreamSource(s), false, () => s.getTracks().forEach(t => t.stop()));
     setStatus("Listening to the shared tab. Play your music there.");
@@ -366,13 +378,14 @@ function analyticModes() {                       // classic cos/cos figures: use
   return { f: Float32Array.from(list, m => m.f), la: Uint8Array.from(list, m => m.n), lb: Uint8Array.from(list, m => m.m), W };
 }
 async function loadModeSet(shape) {
+  if (shape === "circle") return loadClampedCircle(FG);
   const r = await fetch(`data/modes_${shape}.bin`);
   if (!r.ok) throw new Error(`modes_${shape}.bin: HTTP ${r.status}`);
   const ab = await r.arrayBuffer(), dv = new DataView(ab), n = dv.getUint32(0, true), fg = dv.getUint32(4, true);
   if (fg !== FG) throw new Error("mode grid size mismatch");
   const q = new Int16Array(ab, 8 + 6 * n, n * FG * FG), W = new Float32Array(q.length);
   for (let i = 0; i < q.length; i++) W[i] = q[i] / 32767;
-  return { f: new Float32Array(ab, 8, n), la: new Uint8Array(ab, 8 + 4 * n, n), lb: new Uint8Array(ab, 8 + 5 * n, n), W };
+  return { f: new Float32Array(ab, 8, n), la: new Uint8Array(ab, 8 + 4 * n, n), lb: new Uint8Array(ab, 8 + 5 * n, n), W, physical: true };
 }
 
 // ============================================================ plate physics
@@ -550,17 +563,16 @@ class Plate {
     this.mband = this.mf.map(f => f < 250 ? 0 : f < 2500 ? 1 : 2);
     this.amp = new Float32Array(M); this.ts = new Float32Array(M); this.hold = new Int32Array(M);
     this.drive = Float32Array.from({ length: M }, (_, i) => Math.abs(set.W[i * FG * FG + idx]));
-    this.top = null; this.freq = 0;
+    this.top = null; this.freq = 0; this.pendingReport = null;
+    this.E.fill(0); this.EX.fill(0); this.EY.fill(0);
+    physicalModel?.configure(set);
     this.reset();                                // fresh sand for a new plate
     if (this.rate) this.rebuildBanks();
   }
   setRate(r) { this.rate = r; this.rebuildBanks(); }
   rebuildBanks() {
     this.banks.FFT = fftBank(this.mf);
-    this.banks.DCT = dctBank(this.mf);
-    this.banks.CQT = cqtEar(this.mf);
-    this.banks.PEAK = new PeakEar(this);
-    if (this.rftData) this.banks.RFT = rftBank(this.mf, ...this.rftData);
+    // FFT is a pitch readout only. Motion comes exclusively from the audio-rate solver.
   }
   get analysis() { return this.useRft && this.banks.RFT ? "RFT" : "FFT"; }
   reset() {
@@ -575,80 +587,18 @@ class Plate {
   }
 
   analyse(samples) {
-    this.tick++;
-    let ss = 0; for (let i = FFT_N - 2048; i < FFT_N; i++) ss += samples[i] * samples[i];
-    const rms = Math.sqrt(ss / 2048), db = 20 * Math.log10(rms + 1e-9);
-    this.db += (db - this.db) * (db > this.db ? 0.6 : 0.12);
-    const silent = rms < 3e-4;
-    if (silent) this.dbRef -= 0.2; else this.dbRef = Math.max(db, this.dbRef - 0.04, -60);
-    const drive = silent ? 0 : clamp((db - (this.dbRef - 40)) / 40, 0, 1);
-    this.level += (drive - this.level) * (drive > this.level ? 0.7 : 0.08);
-    this.hit *= 0.86; this.hitFlash *= 0.9;
-
-    const M = this.mf.length, tgt = new Float32Array(M), bank = this.banks.FFT;
-    if (!silent && bank) {
-      if (!this.falling) this.mass = Math.min(1, this.mass + 0.0004 * this.level + 0.0016 * this.hit);
-      // sustained resonance: every transform scores each mode against its own loudness
-      // reference; a mode rings if any of them hears it (so no band is left to one transform's blind spot)
-      const t = new Float32Array(M);
-      for (const name of ["FFT", "DCT", "RFT", "CQT"]) {
-        const ear = this.banks[name]; if (!ear) continue;
-        const [mdb, pk] = ear.db(samples);
-        ear.ref = Math.max(pk, ear.ref - 0.1);
-        for (let i = 0; i < M; i++) { const v = clamp((mdb[i] - (ear.ref - 36)) / 36, 0, 1); if (v * v > t[i]) t[i] = v * v; }
-      }
-      if (this.banks.PEAK) { const tv = this.banks.PEAK.tvec(); for (let i = 0; i < M; i++) if (tv[i] > t[i]) t[i] = tv[i]; }
-      // Damped resonance weighting prevents one spectral peak from smearing across
-      // unrelated plate modes while retaining the response to multiple pitches.
-      for (let i = 0; i < M; i++) {
-        let response = 0;
-        for (const [frequency] of this.banks.PEAK?.peaks || []) {
-          const ratio = frequency / this.mf[i];
-          response = Math.max(response, 1 / Math.sqrt(1 + (35 * (ratio - 1 / ratio)) ** 2));
-        }
-        t[i] *= response;
-      }
-      // sand needs seconds to settle, so don't chase the instantaneous loudest modes: a mode's
-      // score rises fast and falls slowly, and a mode picked into the top ten is held ~0.8 s
-      for (let i = 0; i < M; i++) this.ts[i] += (t[i] - this.ts[i]) * (t[i] > this.ts[i] ? 0.25 : 0.04);
-      for (const i of topK(this.ts, 10)) this.hold[i] = this.tick + 40;
-      for (let i = 0; i < M; i++) if (this.hold[i] > this.tick) tgt[i] = this.ts[i];
-
-      // transients: newest ~23 ms, flux per band (low / mid / high)
-      const sp = bank.short(samples), prev = bank.sprev;
-      this.frame++;
-      let strength = 0; const hitBands = [];
-      for (let b = 0; b < 3; b++) {
-        let flux = 0; const mk = bank.sbands[b];
-        for (let i = 0; i < sp.length; i++) if (mk[i]) { const d = sp[i] - prev[i]; if (d > 0) flux += d; }
-        flux *= bank.fluxnorm;
-        const ratio = flux / (this.bflux[b] + 1e-6);
-        if (flux > 0.6 && ratio > 1.5 && this.frame - this.blast[b] >= 2) {
-          this.blast[b] = this.frame; strength = Math.max(strength, Math.min((ratio - 1) / 2.5, 1)); hitBands.push(b);
-        }
-        this.bflux[b] += (flux - this.bflux[b]) * 0.12;
-      }
-      prev.set(sp);
-      if (hitBands.length) {
-        this.hit = Math.max(this.hit, strength); this.hitFlash = 1;
-        const sc = new Float64Array(sp.length + 1);
-        for (let i = 0; i < sp.length; i++) sc[i + 1] = sc[i] + sp[i] * sp[i];
-        const sdb = new Float32Array(M); let ref = -Infinity, any = false;
-        for (let i = 0; i < M; i++) {
-          sdb[i] = 20 * Math.log10(Math.sqrt((sc[bank.shi[i]] - sc[bank.slo[i]]) / (bank.shi[i] - bank.slo[i])) + 1e-9);
-          if (hitBands.includes(this.mband[i])) { any = true; ref = Math.max(ref, sdb[i]); }
-        }
-        if (!any) ref = Math.max(...sdb);
-        const ts = new Float32Array(M);
-        for (let i = 0; i < M; i++) if (hitBands.includes(this.mband[i])) { const v = clamp((sdb[i] - (ref - 24)) / 24, 0, 1); ts[i] = v * v; }
-        for (const i of topK(ts, 10)) this.amp[i] = Math.max(this.amp[i], ts[i] * (0.6 + 0.4 * strength));
-      }
-    }
-    for (let i = 0; i < M; i++) {
-      this.amp[i] += (tgt[i] - this.amp[i]) * (tgt[i] > this.amp[i] ? 0.6 : 0.07);
-      if (this.amp[i] < 0.003) this.amp[i] = 0;
-    }
-    this.buildField();
+    // Do not use display-frame samples as force: the worklet processes every audio sample.
+    const report = this.pendingReport;
+    if (!report || this.solverFailed) return;
+    this.pendingReport = null; this.lastReport = report;
+    this.db = 20 * Math.log10(report.rms + 1e-12);
+    this.banks.FFT?.db(samples);
+    let peak = 0;
+    for (let i=0;i<this.amp.length;i++) { this.amp[i] = Math.sqrt(report.energy[i]) / VirtualPlate.material.gravity; peak = Math.max(peak,this.amp[i]); }
+    // Display meter only; the field keeps absolute acceleration squared, with no AGC.
+    this.level = Math.min(1, Math.sqrt(peak)); this.hit = 0;
+    if (!this.falling && (report.rms > 1e-8 || peak > 1e-6)) this.mass = Math.min(1, this.mass + report.seconds * .035);
+    this.buildField(report);
     this.updateLight();
   }
 
@@ -664,7 +614,7 @@ class Plate {
   updateLight() {
     // the strongest ringing modes each contribute their pitch's colour, as lights add
     const act = [], spec = this.banks.FFT && this.banks.FFT.spec;
-    for (let i = 0; i < this.amp.length; i++) if (this.amp[i] > 0.05) act.push(i);
+    for (let i = 0; i < this.amp.length; i++) if (this.amp[i] > 1e-8) act.push(i);
     act.sort((a, b) => this.amp[b] - this.amp[a]);
     let r = 0, g = 0, b = 0, tw = 0;
     for (const i of act.slice(0, 3)) {
@@ -682,31 +632,29 @@ class Plate {
     this.glow += (gt - this.glow) * 0.012;
   }
 
-  buildField() {
-    // Agitation energy E = sum a_i^2 W_i^2 (modes at different frequencies don't interfere, so the
-    // energies add rather than the displacements) and its gradient; sand slides down E to the nodal lines.
-    let act = [];
-    for (let i = 0; i < this.amp.length; i++) if (this.amp[i] > 0.02) act.push(i);
-    const { E, EX, EY } = this;
-    if (!act.length) { E.fill(0); EX.fill(0); EY.fill(0); return; }
-    if (act.length > 16) act = act.sort((a, b) => this.amp[b] - this.amp[a]).slice(0, 16);
-    let s2 = 1e-9; for (const i of act) s2 += this.amp[i] ** 2;
+  buildField(report) {
+    // Time-averaged acceleration covariance retains phase interference between the
+    // selected physical modes: E(x,y)=<a(x,y)^2>/g^2, not a normalized mode score.
+    const {E,EX,EY}=this, {selected,covariance}=report, size=FG*FG, n=selected.length;
+    const W=this.set.W, gravity2=VirtualPlate.material.gravity**2;
     E.fill(0); EX.fill(0); EY.fill(0);
-    const W = this.set.W, half = FG / 2;
-    for (const i of act) {
-      const a2 = this.amp[i] ** 2 / s2, base = i * FG * FG;
-      for (let y = 0; y < FG; y++) {
-        const ym = y > 0 ? -FG : 0, yp = y < FG - 1 ? FG : 0, ys = (y > 0 && y < FG - 1) ? half : FG;
-        for (let x = 0; x < FG; x++) {
-          const o = base + y * FG + x, w = W[o], k = y * FG + x;
-          const wx = (W[o + (x < FG - 1 ? 1 : 0)] - W[o - (x > 0 ? 1 : 0)]) * ((x > 0 && x < FG - 1) ? half : FG);
-          const wy = (W[o + yp] - W[o + ym]) * ys;
-          E[k] += a2 * w * w; EX[k] += a2 * 2 * w * wx; EY[k] += a2 * 2 * w * wy;
-        }
-      }
+    for(let i=0;i<n;i++) for(let j=0;j<=i;j++) {
+      const coefficient=covariance[i*n+j]*(i===j?1:2)/gravity2;
+      if(Math.abs(coefficient)<1e-20)continue;
+      const a=selected[i]*size,b=selected[j]*size;
+      for(let k=0;k<size;k++) E[k]+=coefficient*W[a+k]*W[b+k];
     }
-    let best = act[0]; for (const i of act) if (this.amp[i] > this.amp[best]) best = i;
-    this.freq = this.mf[best]; this.top = [this.set.la[best], this.set.lb[best]]; this.tuned = true;
+    // Floating-point covariance accumulation can leave tiny negative roundoff.
+    for(let k=0;k<size;k++) E[k]=Math.max(0,E[k]);
+    for(let y=0;y<FG;y++)for(let x=0;x<FG;x++) {
+      const k=y*FG+x;
+      EX[k]=(E[y*FG+Math.min(FG-1,x+1)]-E[y*FG+Math.max(0,x-1)])*(x>0&&x<FG-1?FG/2:FG);
+      EY[k]=(E[Math.min(FG-1,y+1)*FG+x]-E[Math.max(0,y-1)*FG+x])*(y>0&&y<FG-1?FG/2:FG);
+    }
+    let best=0;for(let i=1;i<this.amp.length;i++)if(this.amp[i]>this.amp[best])best=i;
+    if(this.amp[best]>1e-8) {this.freq=this.mf[best];this.top=[this.set.la[best],this.set.lb[best]];this.tuned=true;}
+    else {this.freq=0;this.top=null;}
+    this.coverage=report.coverage;
   }
 
   shakeOff() {
@@ -744,8 +692,7 @@ class Plate {
     }
     const k = Math.floor(this.mass * N);
     if (k < 1 || !this.tuned) { this.gpu.active = 0; return; }
-    let a = 0.18 + 0.82 * this.level;
-    a = this.level > 0.02 ? Math.min(a + 1.4 * this.hit, 2.2) : 0;
+    const a = 1;
     this.gpu.step({ mode: 0, active: k, circle, drift: 0.008 * a, kick: 0.0012 * a + 0.008 * this.hit, fallT: 0 }, this.E, this.EX, this.EY);
   }
 
@@ -754,8 +701,7 @@ class Plate {
     if (this.falling) { this.fallStep(); return; }
     const k = Math.floor(this.mass * GRAINS);
     if (k < 1 || !this.tuned) return;
-    let a = 0.18 + 0.82 * this.level;
-    a = this.level > 0.02 ? Math.min(a + 1.4 * this.hit, 2.2) : 0;
+    const a = 1;
     const drift = 0.008 * a, kick = 0.0012 * a + 0.008 * this.hit, circle = this.shape === "circle";
     const { p, E, EX, EY } = this, MAXSTEP = 0.02;
     for (let i = 0; i < k; i++) {
@@ -811,9 +757,10 @@ function draw(t) {
   g.save(); g.scale(W / 640, W / 640);
   g.font = "600 17px system-ui, sans-serif"; g.textBaseline = "top";
   let txt;
-  if (pl.level > 0.02 && pl.top) txt = `${noteName(pl.pitch || pl.freq)} · ${(pl.pitch || pl.freq).toFixed(0)} Hz · ${pl.db.toFixed(0)} dB · mode ${pl.top[0]},${pl.top[1]}`;
-  else if (pl.useRft && pl.rftState === "building") txt = "loading…";
+  if (pl.top) txt = `${noteName(pl.pitch || pl.freq)} · ${(pl.pitch || pl.freq).toFixed(0)} Hz · ${pl.db.toFixed(0)} dBFS · mode ${pl.top[0]},${pl.top[1]}`;
+  else if (!pl.set.physical || (ctx && !pl.lastReport)) txt = "loading plate model…";
   else txt = ctx ? "listening…" : "";
+  if (pl.coverage < .95 && pl.top) txt += ` · field ${Math.round(pl.coverage*100)}%`;
   g.fillStyle = "rgba(235,225,200,.8)"; g.fillText(txt, 14, 12);
   g.fillStyle = "rgba(0,0,0,.45)"; g.fillRect(14, 40, 150, 6);
   g.fillStyle = "rgba(226,196,140,.9)"; g.fillRect(14, 40, 150 * Math.min(pl.level, 1), 6);
@@ -823,15 +770,16 @@ function draw(t) {
   st.setProperty("--glow", pl.light.map(c => Math.round(c * 255)).join(","));
   st.setProperty("--ga", pl.glow.toFixed(3));
 }
-let last = 0;
+let last = 0, sandClock = 0;
 function loop(t) {
   requestAnimationFrame(loop);
   if (t - last < 15) return;                  // cap near 60 fps
-  last = t;
+  const elapsed = Math.min(.1,(t-last)/1000); last = t;
   if (analyser) analyser.getFloatTimeDomainData(buf);
   bowUpdate();
   plate.analyse(buf);
-  plate.step();
+  sandClock += elapsed;
+  while (sandClock >= 1/60) { plate.step(); sandClock -= 1/60; }
   renderSand();
   draw(t);
   $("bShake").disabled = !(plate.mass > 0 && !plate.falling);
@@ -890,12 +838,8 @@ async function useShape(shape) {
 }
 $("bShape").onclick = async () => { $("bShape").disabled = true; await useShape(plate.shape === "square" ? "circle" : "square"); $("bShape").disabled = false; };
 useShape("square");
-// matrices load in the background; until they're in, the plate uses a plain spectrum
-Promise.all([loadRft(RFT_LONG), loadRft(RFT_SHORT)]).then(d => {
-  plate.rftData = d;
-  if (ctx) plate.banks.RFT = rftBank(plate.mf, ...d);
-  plate.rftState = "ready";
-}).catch(e => { plate.rftState = "failed"; setStatus("Analysis data failed to load (" + e.message + "); using fallback."); });
+// RFT remains in the repository for transform research. It does not drive the physical solver.
+plate.rftState = 'not used by physical model';
 </script>
 </body>
 </html>
