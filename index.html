@@ -148,7 +148,7 @@ function makeFFT(n) {
   const cs = new Float32Array(n / 2), sn = new Float32Array(n / 2);
   for (let k = 0; k < n / 2; k++) { cs[k] = Math.cos(2 * Math.PI * k / n); sn[k] = Math.sin(2 * Math.PI * k / n); }
   const re = new Float32Array(n), im = new Float32Array(n);
-  return (x, out) => {                       // x: windowed real input -> out[0..n/2] magnitudes
+  return x => {                              // real input -> complex spectrum (shared arrays)
     for (let i = 0; i < n; i++) { re[rev[i]] = x[i]; im[rev[i]] = 0; }
     for (let size = 2; size <= n; size <<= 1) {
       const half = size >> 1, step = n / size;
@@ -159,7 +159,7 @@ function makeFFT(n) {
           re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
         }
     }
-    for (let k = 0; k <= n / 2; k++) out[k] = Math.hypot(re[k], im[k]);
+    return [re, im];
   };
 }
 const hann = n => Float32Array.from({ length: n }, (_, i) => 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1)));
@@ -173,7 +173,28 @@ class Bank {
     this.sbands = [[35, 250], [250, 2500], [2500, 9000]]
       .map(([a, b]) => Uint8Array.from(fshort, f => f >= a && f < b ? 1 : 0));
     this.sprev = new Float32Array(fshort.length);
+    this.ref = -60;                             // this transform's own loudness reference
+    this.every = 1; this.n = 0;                 // >1: recompute only every few frames
   }
+  db(s) {                                       // dB in each plate mode's band, plus spectral peak
+    if (this.every > 1 && this.last && this.n++ % this.every) return this.last;   // reuse the last result
+    const spec = this.long(s), M = this.lo.length;
+    if (!this.cs || this.cs.length !== spec.length + 1) { this.cs = new Float64Array(spec.length + 1); this.mdb = new Float32Array(M); }
+    const cs = this.cs; let pk = 0;
+    for (let i = 0; i < spec.length; i++) { cs[i + 1] = cs[i] + spec[i] * spec[i]; if (this.sel[i] && spec[i] > pk) pk = spec[i]; }
+    for (let i = 0; i < M; i++)
+      this.mdb[i] = 20 * Math.log10(Math.sqrt((cs[this.hi[i]] - cs[this.lo[i]]) / (this.hi[i] - this.lo[i])) + 1e-9);
+    return this.last = [this.mdb, 20 * Math.log10(pk + 1e-9)];
+  }
+}
+function span(freqs, mf, a, b, minN = 3) {      // index range per mode; irregular axes get >= minN bins
+  const lo = [], hi = [];
+  for (const f of mf) {
+    let l = lowerBound(freqs, f * a), h = upperBound(freqs, f * b);
+    if (h - l < minN) { l = clamp(Math.floor((l + h - minN) / 2), 0, freqs.length - minN); h = l + minN; }
+    lo.push(l); hi.push(h);
+  }
+  return [lo, hi];
 }
 function fftBank(mf) {
   const w1 = hann(FFT_N), w2 = hann(SN), f1 = makeFFT(FFT_N), f2 = makeFFT(SN);
@@ -184,9 +205,56 @@ function fftBank(mf) {
   const lo = mf.map(f => Math.floor(f * 0.96 / df)), hi = lo.map((l, i) => Math.max(l + 2, Math.ceil(mf[i] * 1.04 / df)));
   const slo = mf.map(f => Math.floor(f * 0.9 / sdf)), shi = slo.map((l, i) => Math.max(l + 2, Math.ceil(mf[i] * 1.1 / sdf)));
   return new Bank(
-    s => { for (let i = 0; i < FFT_N; i++) x1[i] = s[i] * w1[i]; f1(x1, o1); return o1; }, fr(FFT_N),
-    s => { for (let i = 0; i < SN; i++) x2[i] = s[FFT_N - SN + i] * w2[i]; f2(x2, o2); return o2; }, fr(SN),
+    s => { for (let i = 0; i < FFT_N; i++) x1[i] = s[i] * w1[i]; const [r, m] = f1(x1); for (let k = 0; k < o1.length; k++) o1[k] = Math.hypot(r[k], m[k]); return o1; }, fr(FFT_N),
+    s => { for (let i = 0; i < SN; i++) x2[i] = s[FFT_N - SN + i] * w2[i]; const [r, m] = f2(x2); for (let k = 0; k < o2.length; k++) o2[k] = Math.hypot(r[k], m[k]); return o2; }, fr(SN),
     lo, hi, slo, shi, 1);
+}
+
+// DCT-II of the Hann-windowed buffer (via a 2N even extension): real, twice the FFT's bin density
+function dctBank(mf) {
+  const N = FFT_N, w = hann(N), fft = makeFFT(2 * N), v = new Float32Array(2 * N), out = new Float32Array(N);
+  const cth = Float32Array.from({ length: N }, (_, k) => Math.cos(Math.PI * k / (2 * N)));
+  const sth = Float32Array.from({ length: N }, (_, k) => Math.sin(Math.PI * k / (2 * N)));
+  const freqs = Float32Array.from({ length: N }, (_, k) => k * RATE / (2 * N));
+  const fn = s => {
+    for (let i = 0; i < N; i++) { v[i] = s[i] * w[i]; v[2 * N - 1 - i] = v[i]; }
+    const [re, im] = fft(v);
+    for (let k = 0; k < N; k++) out[k] = Math.abs(0.5 * (re[k] * cth[k] + im[k] * sth[k]));
+    return out;
+  };
+  const [lo, hi] = span(freqs, mf, 0.96, 1.04);
+  const bank = new Bank(fn, freqs, null, [], lo, hi, [], [], 1);
+  bank.every = 2;                               // 170 ms-scale windows overlap heavily
+  return bank;
+}
+// Constant-Q: one tuned Hann-windowed filter per plate mode. Window length ~ Q/f, so low modes
+// get long windows and high modes short ones; every band is resolved about equally sharply.
+function cqtEar(mf) {
+  const Q = 40, M = mf.length, len = [], off = [];
+  let tot = 0;
+  for (const f of mf) { const L = Math.min(FFT_N, Math.round(Q * RATE / f)); off.push(tot); len.push(L); tot += L; }
+  const kc = new Float32Array(tot), ks = new Float32Array(tot), mdb = new Float32Array(M);
+  for (let i = 0; i < M; i++) {
+    const L = len[i], w = hann(L);
+    for (let j = 0; j < L; j++) {
+      const ph = 2 * Math.PI * mf[i] * j / RATE;
+      kc[off[i] + j] = w[j] * Math.cos(ph); ks[off[i] + j] = w[j] * Math.sin(ph);
+    }
+  }
+  return {
+    ref: -60,
+    db(s) {
+      let pk = -Infinity;
+      for (let i = 0; i < M; i++) {
+        const L = len[i], o = off[i], b = FFT_N - L;
+        let cr = 0, ci = 0;
+        for (let j = 0; j < L; j++) { const x = s[b + j]; cr += x * kc[o + j]; ci += x * ks[o + j]; }
+        mdb[i] = 20 * Math.log10(Math.hypot(cr, ci) * FFT_N / L + 1e-9);   // scaled like the FFT peak
+        if (mdb[i] > pk) pk = mdb[i];
+      }
+      return [mdb, pk];
+    },
+  };
 }
 
 async function loadRft(N) {
@@ -222,16 +290,7 @@ function rftSide(N, UH, every = 1) {
 }
 function rftBank(mf, UHl, UHs) {
   const [fl, flong] = rftSide(RFT_LONG, UHl, 2), [fs, fshort] = rftSide(RFT_SHORT, UHs);
-  const span = (freqs, a, b, minN = 3) => {            // nodes are irregular: guarantee a few
-    const lo = [], hi = [];
-    for (const f of mf) {
-      let l = lowerBound(freqs, f * a), h = upperBound(freqs, f * b);
-      if (h - l < minN) { l = clamp(Math.floor((l + h - minN) / 2), 0, freqs.length - minN); h = l + minN; }
-      lo.push(l); hi.push(h);
-    }
-    return [lo, hi];
-  };
-  const [lo, hi] = span(flong, 0.96, 1.04), [slo, shi] = span(fshort, 0.9, 1.1);
+  const [lo, hi] = span(flong, mf, 0.96, 1.04), [slo, shi] = span(fshort, mf, 0.9, 1.1);
   return new Bank(fl, flong, fs, fshort, lo, hi, slo, shi, SN / (2 * RFT_SHORT));
 }
 
@@ -263,7 +322,7 @@ class Plate {
     this.U = new Float32Array(FG * FG); this.UX = new Float32Array(FG * FG); this.UY = new Float32Array(FG * FG);
     this.p = new Float32Array(GRAINS * 2);
     this.bflux = [1, 1, 1]; this.blast = [-99, -99, -99];
-    this.frame = 0; this.db = -90; this.dbRef = -40; this.bandRef = -60;
+    this.frame = 0; this.db = -90; this.dbRef = -40;
     this.level = 0; this.hit = 0; this.hitFlash = 0; this.freq = 0; this.top = null;
     this.useRft = true; this.rftState = "building";
     this.banks = {};
@@ -271,6 +330,8 @@ class Plate {
   }
   setRate(r) {
     this.banks.FFT = fftBank(this.mf);
+    this.banks.DCT = dctBank(this.mf);
+    this.banks.CQT = cqtEar(this.mf);
     if (this.rftData) this.banks.RFT = rftBank(this.mf, ...this.rftData);
   }
   get analysis() { return this.useRft && this.banks.RFT ? "RFT" : "FFT"; }
@@ -291,18 +352,15 @@ class Plate {
 
     const M = this.modes.length, tgt = new Float32Array(M), bank = this.banks[this.analysis];
     if (!silent && bank) {
-      const spec = bank.long(samples);
       if (!this.falling) this.mass = Math.min(1, this.mass + 0.0004 * this.level + 0.0016 * this.hit);
-      // sustained resonance: dB in each mode's band (long window)
-      const cs = new Float64Array(spec.length + 1);
-      let pk = 0;
-      for (let i = 0; i < spec.length; i++) { cs[i + 1] = cs[i] + spec[i] * spec[i]; if (bank.sel[i] && spec[i] > pk) pk = spec[i]; }
+      // sustained resonance: every transform scores each mode against its own loudness
+      // reference; a mode rings if any of them hears it (so no band is left to one transform's blind spot)
       const t = new Float32Array(M);
-      this.bandRef = Math.max(20 * Math.log10(pk + 1e-9), this.bandRef - 0.1);
-      for (let i = 0; i < M; i++) {
-        const e = Math.sqrt((cs[bank.hi[i]] - cs[bank.lo[i]]) / (bank.hi[i] - bank.lo[i]));
-        const v = clamp((20 * Math.log10(e + 1e-9) - (this.bandRef - 36)) / 36, 0, 1);
-        t[i] = v * v;
+      for (const name of ["FFT", "DCT", "RFT", "CQT"]) {
+        const ear = this.banks[name]; if (!ear) continue;
+        const [mdb, pk] = ear.db(samples);
+        ear.ref = Math.max(pk, ear.ref - 0.1);
+        for (let i = 0; i < M; i++) { const v = clamp((mdb[i] - (ear.ref - 36)) / 36, 0, 1); if (v * v > t[i]) t[i] = v * v; }
       }
       for (const i of topK(t, 10)) tgt[i] = t[i];
 

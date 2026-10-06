@@ -8,7 +8,17 @@ sand slides to the nodal lines.
 **Web player:** https://anharmoniclabs.github.io/cymantix/ — play a demo, an audio
 file, a shared tab's audio, or the microphone. Everything runs in your browser.
 
-## The analysis transform
+## Transforms
+
+The plate hears through four transforms at once — **FFT**, **DCT**, the **RFT**, and a
+**constant-Q** bank (one tuned filter per plate mode: long windows for low modes, short
+for high ones). Each scores every mode against its own loudness reference and a mode
+rings if any of them hears it. Over an 80-tone sweep, the constant-Q bank picks the
+nearest plate mode on 77/80 tones against 36–45/80 for the others; the fused set keeps
+that. (The constant-Q bank is evaluated at the mode frequencies, which favours it in this
+test.) The desktop app has a *Transforms* menu to switch each one on or off.
+
+## The RFT
 
 The plate listens through the Resonant Fourier Transform (L. M. Minier,
 *What I Got Wrong*, Eqs. 1–2):

@@ -262,6 +262,25 @@ class Bank:
                        for a, b in ((35, 250), (250, 2500), (2500, 9000))]
         self.sprev = np.zeros(len(fshort), dtype=np.float32)
         self.fluxnorm = fluxnorm
+        self.ref = -60.0       # this transform's own loudness reference
+
+    def db(self, s):
+        """dB in each plate mode's band (long window), plus the spectral peak."""
+        spec = self.long(s)
+        cs = np.concatenate(([0.0], np.cumsum(spec.astype(np.float64) ** 2)))
+        e = np.sqrt((cs[self.hi] - cs[self.lo]) / (self.hi - self.lo))
+        return (20 * np.log10(e + 1e-9),
+                20 * math.log10(float(spec[self.sel].max()) + 1e-9))
+
+
+def span(freqs, mf, a, b, min_n=3):
+    """Index range per mode; irregular axes are guaranteed at least min_n bins."""
+    lo = np.searchsorted(freqs, mf * a)
+    hi = np.searchsorted(freqs, mf * b, side="right")
+    short = hi - lo < min_n
+    lo = np.where(short, np.clip((lo + hi - min_n) // 2, 0, len(freqs) - min_n), lo)
+    hi = np.where(short, lo + min_n, hi)
+    return lo, hi
 
 
 def fft_bank(mf):
@@ -288,21 +307,50 @@ def rft_bank(mf):
         fn = lambda s: (np.abs(UH @ (s[-N:] * win))[order] * gain).astype(np.float32)
         return fn, eff[order]
 
-    def span(freqs, a, b, min_n=3):
-        lo = np.searchsorted(freqs, mf * a)
-        hi = np.searchsorted(freqs, mf * b, side="right")
-        short = hi - lo < min_n             # nodes are irregular: guarantee a few
-        lo = np.where(short, np.clip((lo + hi - min_n) // 2, 0, len(freqs) - min_n), lo)
-        hi = np.where(short, lo + min_n, hi)
-        return lo, hi
-
     fl, flong = side(RFT_LONG)
     fs, fshort = side(RFT_SHORT)
-    lo, hi = span(flong, 0.96, 1.04)
-    slo, shi = span(fshort, 0.9, 1.1)
+    lo, hi = span(flong, mf, 0.96, 1.04)
+    slo, shi = span(fshort, mf, 0.9, 1.1)
     # flux sums magnitudes over a band; RFT has 2N/RATE nodes per Hz vs N/RATE
     return Bank(fl, flong, fs, fshort, mf, lo, hi, slo, shi,
                 fluxnorm=1024 / (2 * RFT_SHORT))
+
+
+def dct_bank(mf):
+    """DCT-II of the Hann-windowed buffer (via a 2N even extension): real-valued,
+    twice the FFT's bin density at the same window length."""
+    N = FFT_N
+    win = np.hanning(N).astype(np.float32)
+    freqs = np.arange(N) * RATE / (2 * N)
+    th = np.exp(-1j * np.pi * np.arange(N) / (2 * N))
+
+    def fn(s):
+        v = s * win
+        X = np.fft.fft(np.concatenate((v, v[::-1])))[:N] * th
+        return np.abs(0.5 * X.real).astype(np.float32)
+
+    lo, hi = span(freqs, mf, 0.96, 1.04)
+    return Bank(fn, freqs, None, np.zeros(0), mf, lo, hi, None, None)
+
+
+class CqtEar:
+    """Constant-Q: one tuned Hann-windowed filter per plate mode. Window length
+    ~ Q/f, so low modes get long windows and high modes short ones."""
+    Q = 40
+
+    def __init__(self, mf):
+        self.L = np.minimum(FFT_N, np.round(self.Q * RATE / mf)).astype(int)
+        ks = [(np.hanning(L) * np.exp(-2j * np.pi * f * np.arange(L) / RATE))
+              for f, L in zip(mf, self.L)]
+        self.kc = [k.real.astype(np.float32) for k in ks]
+        self.ks = [k.imag.astype(np.float32) for k in ks]
+        self.ref = -60.0
+
+    def db(self, s):
+        c = np.array([math.hypot(float(s[FFT_N - L:] @ kc), float(s[FFT_N - L:] @ ks))
+                      * FFT_N / L for L, kc, ks in zip(self.L, self.kc, self.ks)])
+        d = 20 * np.log10(c + 1e-9)      # scaled like the FFT peak
+        return d, float(d.max())
 
 
 # ------------------------------------------------------------------- physics
@@ -338,8 +386,9 @@ class Plate:
         self.mm = np.array([k[1] for k in self.modes])
         self.ms = np.array([k[2] for k in self.modes], dtype=np.float32)
         self.mf = np.array([k[3] for k in self.modes])
-        self.banks = {"FFT": fft_bank(self.mf)}
-        self.use_rft = True
+        self.banks = {"FFT": fft_bank(self.mf), "DCT": dct_bank(self.mf),
+                      "CQT": CqtEar(self.mf)}
+        self.on = {n: True for n in ("FFT", "DCT", "RFT", "CQT")}
         self.rft_state = "building"      # building -> ready | failed
         threading.Thread(target=self._load_rft, daemon=True).start()
         self.amp = np.zeros(len(self.modes))        # modal amplitudes 0..1
@@ -357,7 +406,6 @@ class Plate:
         self.frame = 0
         self.db = -90.0        # measured loudness, dBFS
         self.db_ref = -40.0    # recent peak dB (auto-gain reference)
-        self.band_ref = -60.0
         self.level = 0.0       # drive amplitude 0..1 derived from dB
         self.hit = 0.0
         self.hit_flash = 0.0
@@ -374,7 +422,12 @@ class Plate:
 
     @property
     def analysis(self):
-        return "RFT" if self.use_rft and "RFT" in self.banks else "FFT"
+        """Bank whose short window drives the transient detector."""
+        return "RFT" if self.on["RFT"] and "RFT" in self.banks else "FFT"
+
+    def ears(self):
+        return [(n, self.banks[n]) for n in ("FFT", "DCT", "RFT", "CQT")
+                if self.on[n] and n in self.banks]
 
     def reset(self):
         """Empty plate: sand is added gradually as music plays."""
@@ -401,17 +454,16 @@ class Plate:
         tgt = np.zeros(len(self.modes))
         if not silent:
             bank = self.banks[self.analysis]
-            spec = bank.long(samples)
             if not self.falling:
                 self.mass = min(1.0, self.mass + 0.0004 * self.level
                                 + 0.0016 * self.hit)
-            # --- sustained resonance: dB in each mode's band (long window)
-            cs = np.concatenate(([0.0], np.cumsum(spec.astype(np.float64) ** 2)))
-            e = np.sqrt((cs[bank.hi] - cs[bank.lo]) / (bank.hi - bank.lo))
-            mdb = 20 * np.log10(e + 1e-9)
-            peak_db = 20 * math.log10(float(spec[bank.sel].max()) + 1e-9)
-            self.band_ref = max(peak_db, self.band_ref - 0.1)
-            t = np.clip((mdb - (self.band_ref - 36)) / 36, 0, 1) ** 2
+            # --- sustained resonance: every transform scores each mode against its
+            # own loudness reference; a mode rings if any of them hears it
+            t = np.zeros(len(self.modes))
+            for _, ear in self.ears():
+                mdb, peak_db = ear.db(samples)
+                ear.ref = max(peak_db, ear.ref - 0.1)
+                t = np.maximum(t, np.clip((mdb - (ear.ref - 36)) / 36, 0, 1) ** 2)
             idx = np.argpartition(t, -self.TOP)[-self.TOP:]
             tgt[idx] = t[idx]
 
@@ -665,11 +717,11 @@ class Widget(QWidget):
                 txt = self.status
             elif pl.level > 0.02 and pl.top_mode:
                 txt = (f"{pl.db:4.0f} dB · {pl.freq:5.0f} Hz "
-                       f"· mode {pl.top_mode[0]},{pl.top_mode[1]} · {pl.analysis}")
-            elif pl.use_rft and pl.rft_state == "building":
+                       f"· mode {pl.top_mode[0]},{pl.top_mode[1]}")
+            elif pl.on["RFT"] and pl.rft_state == "building":
                 txt = "building RFT (first run only)…"
             else:
-                txt = f"listening… {pl.analysis}"
+                txt = "listening…"
             p.drawText(QRectF(inner.left() + 8, inner.top() + 4, 260 * u, 20),
                        Qt.AlignmentFlag.AlignLeft, txt)
 
@@ -868,10 +920,14 @@ class Widget(QWidget):
             a.setChecked(self.audio.source == name)
             a.triggered.connect(lambda _, n=name: self.set_source(n))
             grp.addAction(a)
-        act = menu.addAction("Analysis: RFT (golden-ratio nodes)")
-        act.setCheckable(True)
-        act.setChecked(self.plate.use_rft)
-        act.toggled.connect(lambda v: setattr(self.plate, "use_rft", v))
+        tm = menu.addMenu("Transforms")
+        for name, label in (("FFT", "FFT"), ("DCT", "DCT"),
+                            ("RFT", "RFT (golden-ratio nodes)"),
+                            ("CQT", "Constant-Q (per-mode filters)")):
+            act = tm.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(self.plate.on[name])
+            act.toggled.connect(lambda v, n=name: self.plate.on.__setitem__(n, v))
         menu.addAction("Shake off sand", self.plate.shake_off)
         for text, attr, cb in (
                 ("Show player panel", "show_player", self.toggle_player),
