@@ -1,9 +1,10 @@
 # Cymantix
 
-A Chladni sand plate that reacts to music. Sound drives a virtual square plate
-(modes `cos(nπx)cos(mπy) − s·cos(mπx)cos(nπy)`, `f ≈ F₀(n²+m²)`); each mode is
-excited by the energy near its own resonance, loudness sets the drive, and the
-sand slides to the nodal lines.
+A Chladni sand plate that reacts to music. Audio drives a modeled steel plate, every mode a
+damped oscillator at the audio sample rate. The plate is tuned to the music: the dominant pitch
+picks one of the plate's symmetric figures (low notes simple, high notes intricate), the plate is
+retuned so that pitch rings the figure's resonance, and the sand gathers on its nodal lines.
+See [MODEL.md](MODEL.md) for the model and its limits.
 
 **Web player:** https://anharmoniclabs.github.io/cymantix/ — play a demo, an audio
 file, a shared tab's audio, or the microphone. Everything runs in your browser.
