@@ -31,9 +31,11 @@ diameter at r = 0.6, so each degenerate pair rings only its cos member. These mo
 form a ladder. The peak of a ~0.5 s smoothed spectrum (with hysteresis, so a chord does not flip
 between its notes) is placed on the ladder by its position between 65 Hz and 1.1 kHz, and the
 whole mode set is scaled so that pitch sits exactly on the chosen mode's resonance. A new figure
-is held at least 0.9 s and the plate is jolted as it changes. While the chosen mode rings, its
-shape alone guides the sand; other modes would leave a residue along its nodal lines and pull the
-grains into blobs. Mode shapes and per-mode physics are unchanged; the plate is a tunable one.
+is held at least 1.2 s and the plate is jolted as it changes. The chosen mode's shape alone guides
+the sand (before the first lock, the ladder mode the solver rings hardest); mixing modes would
+leave sand only where every nodal set crosses, which reads as scattered dots. The pitch peak is
+tilted by sqrt(f) toward melody and chords so drums and bass do not pick every figure, and the
+shaking level is measured against the recent peak, so quiet tab audio works as well as loud. Mode shapes and per-mode physics are unchanged; the plate is a tunable one.
 
 The circular option uses clamped Kirchhoff plate modes. Its radial profiles satisfy the
 clamped boundary equation and are checked by `tools/export_clamped_circle.py`.
