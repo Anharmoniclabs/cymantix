@@ -5,8 +5,8 @@ The browser AudioWorklet integrates each modal oscillator at the audio sample ra
 
 `q̈ + 2ζω q̇ + ω²q = (F / M) x(t)`
 
-where `x(t)` is the audio waveform, `ζ = 0.03`, and the actuator is at normalized
-plate position `(0.37, 0.31)`. The modeled plate is isotropic steel with `E = 200 GPa`,
+where `x(t)` is the audio waveform, `ζ = 0.03`, and the actuator is at the centre of
+the square, or at r = 0.6 on the circle. The modeled plate is isotropic steel with `E = 200 GPa`,
 `ρ = 7850 kg/m³`, thickness `h = 1 mm`, and Poisson ratio `ν = 0.30`. The square
 side length is derived from those constants and the exported mode-frequency scale.
 
@@ -25,10 +25,15 @@ GPU path only advances and renders the grains; it does not choose the pattern.
 For transport the field is divided by its own maximum, so the pattern shape stays visible at any
 music level; the absolute acceleration only sets the shaking level (sand mobility and the meter).
 
-Auto-tune: a real plate is tuned by tension or size. When one pitch dominates for ~0.15 s,
-all mode frequencies are scaled together (within ×0.6–×1.7) so that pitch lands on a
-well-coupled mode, and refitted when the pitch moves. Mode shapes and per-mode physics are
-unchanged; without this the five modes below 200 Hz answer every bass note the same way.
+Figure ladder and tuning (ideas from chladni-tui's mode ladder and Chladni's centre-bolted plate):
+the square is driven at its centre, so only its 20 fully symmetric modes ring; the circle on a
+diameter at r = 0.6, so each degenerate pair rings only its cos member. These modes, lowest first,
+form a ladder. The peak of a ~0.5 s smoothed spectrum (with hysteresis, so a chord does not flip
+between its notes) is placed on the ladder by its position between 65 Hz and 1.1 kHz, and the
+whole mode set is scaled so that pitch sits exactly on the chosen mode's resonance. A new figure
+is held at least 0.9 s and the plate is jolted as it changes. While the chosen mode rings, its
+shape alone guides the sand; other modes would leave a residue along its nodal lines and pull the
+grains into blobs. Mode shapes and per-mode physics are unchanged; the plate is a tunable one.
 
 The circular option uses clamped Kirchhoff plate modes. Its radial profiles satisfy the
 clamped boundary equation and are checked by `tools/export_clamped_circle.py`.
