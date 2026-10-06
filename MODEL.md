@@ -35,6 +35,11 @@ crosses, which reads as scattered dots. The mode shapes are solved offline from 
 the grains are simulated live and form the figure themselves. The shaking level is measured
 against the recent peak, so quiet tab audio works as well as loud.
 
+Hits: the original player's transient detector is restored (positive spectral flux of the newest
+~23 ms in low/mid/high bands against each band's running average). A hit raises the sand's
+mobility and throws grains off the lines in proportion to the local vibration; between beats they
+slide back into the figure.
+
 The circular option uses clamped Kirchhoff plate modes. Its radial profiles satisfy the
 clamped boundary equation and are checked by `tools/export_clamped_circle.py`.
 

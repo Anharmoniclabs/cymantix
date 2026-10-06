@@ -595,10 +595,11 @@ class Plate {
     const now = performance.now(); this.dt = Math.min(.5, Math.max(report.seconds, (now - (this.lastT || now)) / 1000)); this.lastT = now;
     this.db = 20 * Math.log10(report.rms + 1e-12);
     this.banks.FFT?.db(samples);
+    this.detectHits(samples);
     this.chooseFigure(report);
     let peak = 0;
     for (let i=0;i<this.amp.length;i++) { this.amp[i] = Math.sqrt(report.energy[i]) / VirtualPlate.material.gravity; peak = Math.max(peak,this.amp[i]); }
-    this.hit *= Math.exp(-this.dt / .2);
+    this.hit *= Math.exp(-this.dt / .11);
     if (!this.falling && (report.rms > 1e-8 || peak > 1e-6)) this.mass = Math.min(1, this.mass + report.seconds * .3);
     this.buildField(report);
     this.updateLight();
@@ -634,6 +635,29 @@ class Plate {
     this.glow += (gt - this.glow) * 0.012;
   }
 
+  detectHits(samples) {
+    // Transients, as in the original player: positive spectral flux of the newest ~23 ms per band
+    // (low / mid / high) against that band's running average. A hit throws the sand off the lines;
+    // it slides back into the figure between beats.
+    const bank = this.banks.FFT; if (!bank) return;
+    const sp = bank.short(samples), prev = bank.sprev; this.frame++;
+    let strength = 0; const hitBands = [];
+    for (let b = 0; b < 3; b++) {
+      let flux = 0; const mk = bank.sbands[b];
+      for (let i = 0; i < sp.length; i++) if (mk[i]) { const d = sp[i] - prev[i]; if (d > 0) flux += d; }
+      flux *= bank.fluxnorm;
+      const ratio = flux / (this.bflux[b] + 1e-6);
+      if (flux > 0.6 && ratio > 1.5 && this.frame - this.blast[b] >= 2) {
+        this.blast[b] = this.frame; strength = Math.max(strength, Math.min((ratio - 1) / 2.5, 1)); hitBands.push(b);
+      }
+      this.bflux[b] += (flux - this.bflux[b]) * 0.12;
+    }
+    prev.set(sp);
+    this.hitBands = hitBands;
+    if (!hitBands.length) return;
+    this.hit = Math.max(this.hit, strength); this.hitFlash = 1;
+  }
+
   chooseFigure(report) {
     // True to frequency: the plate keeps its real mode frequencies, and the figure is the mode the
     // music drives hardest through its own resonance. Harmonics count, so a note far from any mode
@@ -666,7 +690,7 @@ class Plate {
     if (best !== this.figureNext) { this.figureNext = best; this.figureHeld = 0; } else this.figureHeld += this.dt;
     const now = performance.now();
     if (best === cur || this.figureHeld < .3 || (cur >= 0 && now - this.figureAt < 1200)) return;
-    this.figure = best; this.figureAt = now; this.hit = .6;        // the plate jolts as the figure changes, re-spreading the sand
+    this.figure = best; this.figureAt = now; this.hit = Math.max(this.hit, .4);   // the plate jolts as the figure changes
   }
 
 
@@ -735,8 +759,8 @@ class Plate {
     }
     const k = Math.floor(this.mass * N);
     if (k < 1 || !this.tuned) { this.gpu.active = 0; return; }
-    const a = this.level > .03 ? .35 + .65 * this.level : 0;
-    this.gpu.step({ mode: 0, active: k, circle, drift: 0.008 * a, kick: 0.003 * a + 0.008 * this.hit, fallT: 0 }, this.E, this.EX, this.EY);
+    const a = this.level > .02 ? Math.min(.18 + .82 * this.level + 1.4 * this.hit, 2.2) : 0;   // loudness and hits shake the plate
+    this.gpu.step({ mode: 0, active: k, circle, drift: 0.005 * a, kick: 0.004 * a + 0.016 * this.hit, fallT: 0 }, this.E, this.EX, this.EY);
   }
 
   step() {
@@ -744,8 +768,8 @@ class Plate {
     if (this.falling) { this.fallStep(); return; }
     const k = Math.floor(this.mass * GRAINS);
     if (k < 1 || !this.tuned) return;
-    const a = this.level > .03 ? .35 + .65 * this.level : 0;
-    const drift = 0.008 * a, kick = 0.003 * a + 0.008 * this.hit, circle = this.shape === "circle";
+    const a = this.level > .02 ? Math.min(.18 + .82 * this.level + 1.4 * this.hit, 2.2) : 0;   // loudness and hits shake the plate
+    const drift = 0.005 * a, kick = 0.004 * a + 0.016 * this.hit, circle = this.shape === "circle";
     const { p, E, EX, EY } = this, MAXSTEP = 0.02;
     for (let i = 0; i < k; i++) {
       let x = p[2 * i], y = p[2 * i + 1];
