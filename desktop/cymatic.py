@@ -22,8 +22,7 @@ import urllib.request
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import (QActionGroup, QBrush, QColor, QFont, QFontMetrics,
-                         QImage, QLinearGradient, QPainter, QPainterPath, QPen,
-                         QRadialGradient)
+                         QImage, QLinearGradient, QPainter, QPainterPath, QPen)
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
 RATE = 44100
@@ -495,9 +494,10 @@ class Plate:
                     self.pitch = fp
                 acc += self.amp[i] ** 2 * pitch_color(fp)
             if acc.max() > 0:
-                self.light += (acc / acc.max() - self.light) * 0.18
-        gt = 0.3 + 0.7 * self.level if self.level > 0.02 else 0.0
-        self.glow += (gt - self.glow) * 0.2
+                self.light += (acc / acc.max() - self.light) * 0.015      # ~1 s: hue never jumps
+        # follows average loudness slowly and tops out low: no beat-synced flicker
+        gt = 0.35 + 0.35 * self.level if self.level > 0.02 else 0.0
+        self.glow += (gt - self.glow) * 0.012
 
     def _load_rft(self):
         try:
@@ -744,30 +744,24 @@ class Widget(QWidget):
             return (226, 196, 140), min(1.0, self.plate.level)
         return tuple(int(c * 255) for c in self.plate.light), self.plate.glow
 
-    def lit_sand(self, d):
-        """Sand density -> BGRA, tinted by the lamp and shaded from the upper left."""
-        (lr, lg, lb), glow = self.lamp()
-        L = np.array([lr, lg, lb], dtype=np.float32)
-        sand = np.array([226, 196, 140], dtype=np.float32) * 0.4 + L * 0.6
-        base = np.array([26, 29, 36], dtype=np.float32) + L * (0.03 + 0.13 * glow)
-        v = 1 - np.exp(-np.arange(64, dtype=np.float32) / 2 * 0.9)
-        lut = base + (sand - base) * v[:, None]
-        idx = np.minimum((d * 2).astype(np.int32), 63)
-        gx = np.zeros_like(d); gy = np.zeros_like(d)
-        gx[:, 1:-1] = d[:, 2:] - d[:, :-2]
-        gy[1:-1] = d[2:] - d[:-2]
-        shade = np.where(idx > 0, np.clip(1 + 0.09 * (gx + gy), 0.6, 1.5), 1.0)
-        rgb = np.clip(lut[idx] * shade[..., None], 0, 255)
-        out = np.empty((GRID, GRID, 4), dtype=np.uint8)
-        out[..., 0], out[..., 1], out[..., 2], out[..., 3] = rgb[..., 2], rgb[..., 1], rgb[..., 0], 255
-        return out
+    def sand_image(self, d):
+        """Sand density -> BGRA through a fixed colour table (the plate itself is never lit)."""
+        if not hasattr(self, "lut"):
+            base = np.array([26, 29, 36], dtype=np.float32)
+            sand = np.array([226, 196, 140], dtype=np.float32)
+            v = 1 - np.exp(-np.arange(64, dtype=np.float32) / 2 * 0.9)
+            col = base + (sand - base) * v[:, None]
+            self.lut = np.empty((64, 4), dtype=np.uint8)
+            self.lut[:, 0], self.lut[:, 1], self.lut[:, 2] = col[:, 2], col[:, 1], col[:, 0]
+            self.lut[:, 3] = 255
+        return self.lut[np.minimum((d * 2).astype(np.int32), 63)]
 
     # ----- frame
     def tick(self):
         self.plate.analyse(self.audio.buf)
         self.plate.step()
         d = self.plate.render()
-        self.frame = self.lit_sand(d)
+        self.frame = self.sand_image(d)
         self.img = QImage(self.frame.data, GRID, GRID, GRID * 4,
                           QImage.Format.Format_ARGB32)
         # pick up newly fetched cover art
@@ -794,7 +788,7 @@ class Widget(QWidget):
         outer = QRectF(margin, margin, W - 2 * margin, W - 2 * margin)
         (lr, lg, lb), glow_k = self.lamp()
         for i in range(1, 7):                   # light spilling past the frame
-            p.setPen(QPen(QColor(lr, lg, lb, int(80 * glow_k / i)), 1.5))
+            p.setPen(QPen(QColor(lr, lg, lb, int(34 * glow_k / i)), 1.5))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRoundedRect(outer.adjusted(-i, -i, i, i), 18 + i, 18 + i)
         grad = QLinearGradient(outer.topLeft(), outer.bottomRight())
@@ -808,34 +802,11 @@ class Widget(QWidget):
         clip.addRoundedRect(inner, 8, 8)
         p.setClipPath(clip)
         p.drawImage(inner, self.img)
-        pl = self.plate
-        pulse = glow_k * 0.5 + 0.5 * pl.hit_flash
-        # lamp: bloom from the centre plus a spotlight drifting across the plate,
-        # both in the pitch colour, then a vignette
-        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
-        c, wd = inner.center(), inner.width()
-        rg = QRadialGradient(c, wd * 0.72)
-        rg.setColorAt(0, QColor(lr, lg, lb, int(255 * 0.20 * pulse)))
-        rg.setColorAt(1, QColor(lr, lg, lb, 0))
-        p.fillRect(inner, QBrush(rg))
-        t = time.monotonic() * 1000
-        sp = QPointF(c.x() + wd * 0.28 * math.cos(t / 2300),
-                     c.y() + wd * 0.28 * math.sin(t / 3100))
-        rg = QRadialGradient(sp, wd * 0.42)
-        rg.setColorAt(0, QColor(lr, lg, lb, int(255 * 0.26 * glow_k)))
-        rg.setColorAt(1, QColor(lr, lg, lb, 0))
-        p.fillRect(inner, QBrush(rg))
-        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-        rg = QRadialGradient(c, wd * 0.78)
-        rg.setColorAt(0.58, QColor(0, 0, 0, 0))
-        rg.setColorAt(1, QColor(0, 0, 0, 97))
-        p.fillRect(inner, QBrush(rg))
         p.setClipping(False)
+        pl = self.plate
         if pl.falling and pl.fall_t < 16:      # visible jolt of the whole plate
             p.translate(np.random.uniform(-2, 2) * u, np.random.uniform(-2, 2) * u)
-        glow = QColor(lr, lg, lb, min(255, int(255 * (0.18 + 0.6 * glow_k
-                                                      + 0.45 * pl.hit_flash))))
-        p.setPen(QPen(glow, 1.5 + 2.5 * pl.hit_flash))
+        p.setPen(QPen(QColor(255, 210, 140, 76), 1.5))   # constant: nothing on the plate pulses
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(inner, 8, 8)
 
@@ -855,7 +826,7 @@ class Widget(QWidget):
                 txt = "listening…"
             p.save()
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(lr, lg, lb))
+            p.setBrush(QColor(226, 196, 140))
             p.drawEllipse(QPointF(inner.left() + 14 * u, inner.top() + 12 * u), 4 * u, 4 * u)
             p.restore()
             p.drawText(QRectF(inner.left() + 24 * u, inner.top() + 4, 260 * u, 20),
@@ -866,7 +837,7 @@ class Widget(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(0, 0, 0, 110))
         p.drawRoundedRect(QRectF(inner.left() + 8, my, mw, 4 * u), 2, 2)
-        p.setBrush(QColor(lr, lg, lb, 230))
+        p.setBrush(QColor(226, 196, 140, 230))
         p.drawRoundedRect(QRectF(inner.left() + 8, my, mw * min(pl.level, 1), 4 * u), 2, 2)
         self.btn = {}
         # shake-off button (top-right of the plate)
@@ -1068,7 +1039,7 @@ class Widget(QWidget):
         for text, attr, cb in (
                 ("Show player panel", "show_player", self.toggle_player),
                 ("Show frequency label", "show_label", None),
-                ("Colour lighting", "lighting", None),
+                ("Backdrop glow", "lighting", None),
                 ("Always on top", "always_on_top", self.set_on_top)):
             act = menu.addAction(text)
             act.setCheckable(True)

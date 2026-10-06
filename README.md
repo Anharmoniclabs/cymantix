@@ -20,14 +20,16 @@ test.) The desktop app has a *Transforms* menu to switch each one on or off.
 
 ## Light
 
-The plate is lit by the music's own colour. A pitch is transposed up by whole octaves until
-it lands in the visible band (405–810 THz is exactly one octave), then turned into RGB — so
-every pitch class has the colour it would have as light (A440 is orange-red, C4 green) and
-an octave never changes the hue. The pitch comes from the spectrum peak itself (parabolic
-interpolation, within a few cents from 55 Hz to 5 kHz), not from the plate mode it happens
-to excite. Several ringing pitches mix additively, as lights do. The colour drives a bloom, a
-drifting spotlight, shading on the sand piles, the frame glow and, on the web page, the room
-around the plate. The desktop app has a *Colour lighting* menu toggle.
+Only the backdrop glows, and gently. The glow takes the colour of the pitch: a pitch is
+transposed up by whole octaves until it lands in the visible band (405–810 THz is exactly one
+octave), then turned into RGB, so every pitch class has the colour it would have as light
+(A440 is orange-red, C4 green) and an octave never changes the hue. The pitch is read from the
+spectrum peak (parabolic interpolation, within a few cents from 55 Hz to 5 kHz). Several ringing
+pitches mix additively.
+
+It is deliberately safe: the plate itself is never lit, nothing pulses with the beat, and both
+the colour and the brightness change over roughly a second (even a hard on/off input at 8 Hz
+moves the glow by under 0.4% of its range per frame). The desktop app has a *Backdrop glow* toggle.
 
 ## The RFT
 
