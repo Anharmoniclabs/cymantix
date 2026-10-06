@@ -126,7 +126,7 @@ def bessel_j(m, x, n=1024):
 
 
 def bessel_zeros(m, xmax):
-    xs = np.arange(0.01, xmax + 0.5, 0.02)
+    xs = np.arange(max(0.01, m), xmax + 0.5, 0.02)     # J_m has no zero below x = m
     v = bessel_j(m, xs)
     zs = []
     for i in np.nonzero(v[:-1] * v[1:] < 0)[0]:

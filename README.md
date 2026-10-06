@@ -8,6 +8,29 @@ sand slides to the nodal lines.
 **Web player:** https://anharmoniclabs.github.io/cymantix/ — play a demo, an audio
 file, a shared tab's audio, or the microphone. Everything runs in your browser.
 
+## The plate
+
+- **Real plate modes.** The square plate's modes are solved offline for a free-edge Kirchhoff
+  plate with Ritz's method over free-free beam functions (`desktop/plate_modes.py`; checked
+  against the published eigenvalues, e.g. 13.47, 19.64, 24.31 vs 13.47, 19.60, 24.27). A circular
+  plate (Bessel modes) is one click away. `tools/export_modes.py` writes the web data.
+- **Sand physics.** Agitation energy is summed incoherently, E = Σ aᵢ²Wᵢ², since modes at
+  different frequencies don't interfere. Sand slides down ∇E to the nodal lines, with the slide
+  clamped by magnitude (no diagonal bias).
+- **Steady figures.** A mode's score rises fast and falls slowly, and modes picked into the top
+  ten are held ~0.8 s, because sand needs seconds to settle. Drum hits still strike instantly.
+- **Peak-based excitation.** Spectral peaks excite nearby modes weighted by closeness in cents,
+  strength, and how much the mode moves at the driving point.
+- **Bowing.** Drag across the plate: the pointer position picks the modes that move most there
+  (a node can't be bowed), speed is the bow pressure, and the sound runs through the same ears.
+- **GPU sand.** 262,144 grains advanced by a WebGL2 shader (CPU fallback: 26,000).
+
+The ideas above come from reading other open-source Chladni projects (chladni-tui, MMM-Chladni,
+Resonance Lab, Chladni Plate Visualizer); the code here is an independent implementation.
+
+The desktop app has the four transforms and the backdrop glow, but not yet the solved modes,
+circular plate, bowing or GPU sand.
+
 ## Transforms
 
 The plate hears through four transforms at once — **FFT**, **DCT**, the **RFT**, and a
