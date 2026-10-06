@@ -596,8 +596,8 @@ class Plate {
     let peak = 0;
     for (let i=0;i<this.amp.length;i++) { this.amp[i] = Math.sqrt(report.energy[i]) / VirtualPlate.material.gravity; peak = Math.max(peak,this.amp[i]); }
     // Display meter only; the field keeps absolute acceleration squared, with no AGC.
-    this.level = Math.min(1, Math.sqrt(peak)); this.hit = 0;
-    if (!this.falling && (report.rms > 1e-8 || peak > 1e-6)) this.mass = Math.min(1, this.mass + report.seconds * .035);
+    this.hit = 0;
+    if (!this.falling && (report.rms > 1e-8 || peak > 1e-6)) this.mass = Math.min(1, this.mass + report.seconds * .3);
     this.buildField(report);
     this.updateLight();
   }
@@ -645,7 +645,14 @@ class Plate {
       for(let k=0;k<size;k++) E[k]+=coefficient*W[a+k]*W[b+k];
     }
     // Floating-point covariance accumulation can leave tiny negative roundoff.
-    for(let k=0;k<size;k++) E[k]=Math.max(0,E[k]);
+    let scale=0;
+    for(let k=0;k<size;k++) {E[k]=Math.max(0,E[k]);if(E[k]>scale)scale=E[k];}
+    // Absolute acceleration (g^2) sets how hard the plate shakes (level, mobility); the sand only
+    // needs the pattern's shape, so transport uses the field normalised to its own maximum.
+    // Sand is also light in physical units, so raw g^2 would leave it frozen at music levels.
+    const dB=10*Math.log10(scale+1e-30), target=scale>1e-14?Math.min(1,Math.max(0,(dB+70)/55)):0;
+    this.level+=(target-this.level)*(target>this.level?.6:.12);
+    if(scale>1e-14) for(let k=0;k<size;k++) E[k]/=scale; else E.fill(0);
     for(let y=0;y<FG;y++)for(let x=0;x<FG;x++) {
       const k=y*FG+x;
       EX[k]=(E[y*FG+Math.min(FG-1,x+1)]-E[y*FG+Math.max(0,x-1)])*(x>0&&x<FG-1?FG/2:FG);
@@ -692,7 +699,7 @@ class Plate {
     }
     const k = Math.floor(this.mass * N);
     if (k < 1 || !this.tuned) { this.gpu.active = 0; return; }
-    const a = 1;
+    const a = .35 + .65 * this.level;
     this.gpu.step({ mode: 0, active: k, circle, drift: 0.008 * a, kick: 0.0012 * a + 0.008 * this.hit, fallT: 0 }, this.E, this.EX, this.EY);
   }
 
@@ -701,7 +708,7 @@ class Plate {
     if (this.falling) { this.fallStep(); return; }
     const k = Math.floor(this.mass * GRAINS);
     if (k < 1 || !this.tuned) return;
-    const a = 1;
+    const a = .35 + .65 * this.level;
     const drift = 0.008 * a, kick = 0.0012 * a + 0.008 * this.hit, circle = this.shape === "circle";
     const { p, E, EX, EY } = this, MAXSTEP = 0.02;
     for (let i = 0; i < k; i++) {

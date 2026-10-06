@@ -18,6 +18,8 @@ reinforce or cancel:
 
 Grains move down the gradient of this field toward low-acceleration nodal regions. The
 GPU path only advances and renders the grains; it does not choose the pattern.
+For transport the field is divided by its own maximum, so the pattern shape stays visible at any
+music level; the absolute acceleration only sets the shaking level (sand mobility and the meter).
 
 The circular option uses clamped Kirchhoff plate modes. Its radial profiles satisfy the
 clamped boundary equation and are checked by `tools/export_clamped_circle.py`.
