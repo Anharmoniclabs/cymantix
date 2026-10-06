@@ -5,85 +5,74 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cymantix</title>
 <meta name="description" content="A Chladni sand plate that reacts to music.">
-<style>
-  :root {
-    --bg: #14161b; --panel: #1c1f26; --line: #2c313b; --text: #efe9da;
-    --dim: #9a9ca6; --sand: #e2c48c; --ink: #181a20;
-  }
-  @media (prefers-color-scheme: light) {
-    :root { --bg: #ece7da; --panel: #f6f2e8; --line: #d3ccb8; --text: #22242a;
-            --dim: #6c6e78; --sand: #b8872f; --ink: #fffaf0; }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 15px/1.5 system-ui, sans-serif; min-height: 100vh;
-         display: flex; flex-direction: column; align-items: center;
-         padding: 20px 16px 40px; }
-  h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: .04em; }
-  .sub { color: var(--dim); margin: 0 0 16px; font-size: 13px; text-align: center; }
-  .wrap { width: min(100%, 640px); }
-  /* Backdrop glow only: faint, and it changes over ~a second (never flashes). */
-  :root { --glow: 226,196,140; --ga: 0; }
-  body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
-                 background: radial-gradient(ellipse at 50% 38%, rgba(var(--glow), calc(var(--ga) * .20)) 0%,
-                             rgba(var(--glow), calc(var(--ga) * .07)) 40%, transparent 72%); }
-  .plate { background: linear-gradient(135deg, #5c626e, #282c34); border-radius: 22px;
-           padding: 12px;
-           box-shadow: 0 0 calc(20px + 50px * var(--ga)) calc(1px + 6px * var(--ga)) rgba(var(--glow), calc(.04 + .22 * var(--ga))),
-                       0 8px 30px #0006; }
-  canvas { touch-action: none; cursor: grab; display: block; width: 100%; aspect-ratio: 1; border-radius: 10px; background: #1a1d24; }
-  .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-  button { background: var(--panel); color: var(--text); border: 1px solid var(--line);
-           border-radius: 999px; padding: 8px 14px; font: inherit; cursor: pointer; }
-  button:hover { border-color: var(--sand); }
-  button.on { background: var(--sand); color: var(--ink); border-color: var(--sand); }
-  button.go { background: var(--sand); color: var(--ink); border-color: var(--sand); font-weight: 600; }
-  button:disabled { opacity: .45; cursor: default; }
-  audio { width: 100%; margin-top: 12px; display: none; }
-  .status { color: var(--dim); font-size: 13px; margin-top: 10px; min-height: 1.4em; }
-  details { margin-top: 18px; color: var(--dim); font-size: 13px; }
-  details a { color: var(--sand); }
-  summary { cursor: pointer; color: var(--text); }
-</style>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<h1>CYMANTIX</h1>
-<p class="sub">A Chladni sand plate driven by whatever you play.</p>
-
-<div class="wrap">
-  <div class="plate"><canvas id="cv" width="640" height="640"></canvas></div>
-  <div class="row">
-    <button class="go" id="bDemo">▶ Demo</button>
-    <button id="bTab">Tab / system audio</button>
-  </div>
-  <div class="row">
-    <button id="bShake">⟲ Shake off</button>
-    <button id="bShape">◯ Circular plate</button>
-  </div>
-  <div class="status" id="st">Pick a source to start, or drag across the plate to bow it. Nothing leaves your browser.</div>
-
-  <details>
-    <summary>What am I looking at?</summary>
-    <p>A virtual square plate has resonant modes
-       φ = cos(nπx)cos(mπy) − s·cos(mπx)cos(nπy) at f ≈ F₀(n²+m²). Each mode is
-       driven by the sound energy near its own resonance, and the sand slides toward the
-       nodal lines, as on a real Chladni plate. Loudness (dB) sets how hard the plate is driven.</p>
-    <p><a href="https://github.com/Anharmoniclabs/cymantix">Source &amp; desktop app</a></p>
-  </details>
-</div>
-
+<header><div class="brand"><h1>CYMANTIX</h1><p class="sub">Sound, made visible.</p></div><span class="badge" id="quality">HD SAND LAB</span></header>
+<main class="wrap">
+  <section class="stage" aria-label="Live sand plate">
+    <div class="stage-head"><span class="eyebrow" id="shapeLabel">01 / Square plate</span><span id="sourceLabel">Ready to listen</span></div>
+    <div class="plate" id="plateStage"><canvas id="cv" width="1024" height="1024" aria-label="Interactive Chladni sand plate. Drag to bow the plate."></canvas><div class="empty" id="empty"><strong>Give sound a shape.</strong><span>Play the demo, choose an input,<br>or drag across the sand.</span></div></div>
+    <div class="stage-foot"><span>Drag to bow · Grains settle along quiet lines</span><span id="grainLabel">Preparing sand…</span></div>
+    <div class="readouts">
+      <div class="readout"><span>DOMINANT FREQUENCY</span><strong id="pitchReadout">— Hz</strong></div>
+      <div class="readout"><span>INPUT LEVEL</span><strong id="levelReadout">— dBFS</strong></div>
+      <div class="readout"><span>PLATE RESONANCE</span><strong id="modeReadout">— Hz</strong></div>
+    </div>
+  </section>
+  <aside aria-label="Audio and sand controls">
+    <section class="panel">
+      <h2>Choose your sound</h2>
+      <div class="source-grid">
+        <button class="go" id="bDemo">Play demo</button><button id="bMic">Microphone</button>
+        <button id="bFile">Audio file</button><button id="bTab">Tab / system</button>
+        <button id="bTone">Test tone</button><button id="bStop" disabled>Stop audio</button>
+      </div>
+      <input type="file" id="fileInput" accept="audio/*" hidden>
+      <audio id="player" controls hidden></audio>
+      <div class="tone-controls" id="toneControls" hidden><label class="control" for="tone">Frequency <output id="toneValue">440 Hz</output></label><input id="tone" type="range" min="0" max="1000" step="0.01" value="447.47" aria-label="Test tone frequency"><p class="hint">20 Hz–20 kHz test signal. Playback volume starts low.</p></div>
+      <p class="status" id="st" role="status">Choose a source. Audio is processed on your device.</p>
+      <label class="control" for="sensitivity">Input sensitivity <output id="sensitivityValue">+0 dB</output></label>
+      <input id="sensitivity" type="range" min="0" max="36" step="1" value="0">
+      <label class="control" for="noiseFloor">Response threshold <output id="noiseFloorValue">−78 dBFS</output></label>
+      <input id="noiseFloor" type="range" min="-100" max="-30" step="1" value="-78">
+      <p class="hint">Lower the threshold for quieter sounds. Raise it if room noise keeps the sand moving.</p>
+    </section>
+    <section class="panel">
+      <h2>Live spectrum</h2>
+      <canvas id="spectrum" width="592" height="200" aria-label="Live logarithmic audio spectrum"></canvas>
+      <div class="axis"><span>20 Hz</span><span>200</span><span>2k</span><span id="maxFrequency">20k</span></div>
+      <div class="meter" id="meter"><i id="meterFill"></i></div>
+      <div class="signal-line"><span id="signalState">No input</span><span id="audioInfo">20 Hz–20 kHz analysis</span></div>
+      <label class="control" for="sandAmount">Sand amount <output id="sandAmountValue">65%</output></label>
+      <input id="sandAmount" type="range" min="10" max="100" value="65">
+      <div class="row"><button id="bShake">Shake off</button><button id="bShape">Circular plate</button></div>
+      <div class="row"><button id="bReset">Redistribute sand</button></div>
+      <details><summary>How the plate responds</summary>
+        <p>Sound excites the simulated plate’s resonances. Grains move toward its nodal lines, where vibration is weakest. Square and circular plates have different resonances.</p>
+        <p>The spectrum covers 20 Hz to the lower of 20 kHz or half the audio sample rate. Deep bass uses a longer window; upper frequencies and transients use faster analysis. Both stereo channels are measured.</p>
+        <p>Sounds outside the available plate resonances still agitate the sand, but do not create a fabricated resonance. This is a visual simulation, not a calibrated vibration sensor. Input hardware determines what can actually be captured.</p>
+        <p>Microphone mode requests echo cancellation, noise suppression, and automatic gain control off. Some devices may still apply processing. dBFS describes digital signal level, not room loudness in dB SPL.</p>
+      </details>
+    </section>
+  </aside>
+</main>
+<footer><span>ANHARMONIC LABS / CYMANTIX</span><a href="https://github.com/Anharmoniclabs/cymantix">Source &amp; desktop app</a></footer>
+<script src="spectrum.js"></script>
 <script>
 "use strict";
 // ============================================================ constants
 const FFT_N = 4096, SN = 1024;        // FFT windows (long / short)
 const RFT_LONG = 1597, RFT_SHORT = 610;
-const GRID = 320, GRAINS = 26000, FG = 160, F0 = 17.0, MAXK = 15;
+const GRID = 1024, GRAINS = 26000, FG = 160, F0 = 17.0, MAXK = 15;
 const PHI = (1 + Math.sqrt(5)) / 2;
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const randn = () => (Math.random() + Math.random() + Math.random() - 1.5) * 2;  // ~N(0,1)
 
 // ============================================================ audio graph
-let ctx = null, analyser = null, outGain = null, srcNode = null, stopSrc = null;
+let ctx = null, analyser = null, outGain = null, inputGain = null, srcNode = null, stopSrc = null;
+let wideband = null, sourceName = '', sourceRequest = 0, toneOsc = null, mediaNode = null, fileUrl = null;
+let sandAmount = 0.65;
 const buf = new Float32Array(FFT_N);
 let RATE = 44100;
 
@@ -94,6 +83,12 @@ function ensureCtx() {
   analyser = ctx.createAnalyser();
   analyser.fftSize = FFT_N;
   outGain = ctx.createGain();
+  inputGain = ctx.createGain();
+  inputGain.gain.value = 10 ** (Number($('sensitivity').value) / 20);
+  inputGain.connect(analyser);
+  wideband = new WidebandAudio(ctx, inputGain);
+  wideband.floor = Number($('noiseFloor').value);
+  // Keep the analysis graph running through a silent output.
   analyser.connect(outGain);
   outGain.connect(ctx.destination);
   plate.setRate(RATE);
@@ -103,18 +98,27 @@ function useSource(node, audible, stop) {
   stopSrc = stop || null;
   if (srcNode) try { srcNode.disconnect(); } catch (e) {}
   srcNode = node;
-  node.connect(analyser);
-  outGain.gain.value = audible ? 1 : 0;      // captured tab must not echo back
+  node.connect(inputGain);
+  // Route playback directly: sensitivity must never make playback louder.
+  outGain.gain.value = 0;
+  if (audible) node.connect(ctx.destination);
+  wideband.reset(); plate.clearAudio();
+  $('bStop').disabled = false;
+  $('empty').hidden = true;
 }
 const $ = id => document.getElementById(id);
 const setStatus = t => $("st").textContent = t;
 function mark(id) {
-  for (const b of ["bDemo", "bTab"]) $(b).classList.toggle("go", b === id);
+  for (const b of ['bDemo', 'bTab', 'bMic', 'bFile', 'bTone']) { $(b).classList.toggle('go', b === id); $(b).setAttribute('aria-pressed', String(b === id)); }
+  $('toneControls').hidden = id !== 'bTone';
+  $('player').hidden = id !== 'bFile';
+  const labels = {bDemo: 'Demo playing', bTab: 'Shared audio', bMic: 'Microphone live', bFile: 'Audio file', bTone: 'Test tone'};
+  sourceName = labels[id] || ''; $('sourceLabel').textContent = sourceName || 'Ready to listen';
 }
 
 // -- demo: slow chord progression with a soft kick, so transients show too
 function startDemo() {
-  ensureCtx(); mark("bDemo");
+  sourceRequest++; ensureCtx(); mark("bDemo");
   const bus = ctx.createGain(); bus.gain.value = 0.5;
   const chords = [[110, 165, 220], [98, 147, 196], [131, 196, 262], [123, 185, 247]];
   const oscs = [0, 1, 2].map(() => { const o = ctx.createOscillator(); o.type = "triangle";
@@ -132,22 +136,83 @@ function startDemo() {
   useSource(bus, true, () => { clearInterval(t1); clearInterval(t2); oscs.forEach(o => o.stop()); });
   setStatus("Demo: chord progression + kick.");
 }
-async function startTab() {
+function stopAudio() {
+  sourceRequest++;
+  if (stopSrc) { stopSrc(); stopSrc = null; }
+  if (srcNode) { try { srcNode.disconnect(); } catch {} srcNode = null; }
+  if (bow.bus) { bow.down = false; bow.speed = 0; bow.gains.forEach(gn => gn.gain.setValueAtTime(0, ctx.currentTime)); }
+  buf.fill(0); wideband?.reset(); plate.clearAudio(); mark(null);
+  $('bStop').disabled = true;
+  setStatus('Audio stopped. Choose a source to listen again.');
+}
+async function capture(kind) {
+  const request = ++sourceRequest;
   try {
     ensureCtx();
-    const s = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-    if (!s.getAudioTracks().length) {
-      s.getTracks().forEach(t => t.stop());
-      setStatus("No audio shared. Pick a tab and tick “Share tab audio”."); return;
+    const stream = kind === 'mic'
+      ? await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: {ideal: 2}}, video: false})
+      : await navigator.mediaDevices.getDisplayMedia({video: true, audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false}});
+    if (request !== sourceRequest) { stream.getTracks().forEach(t => t.stop()); return; }
+    if (!stream.getAudioTracks().length) {
+      stream.getTracks().forEach(t => t.stop());
+      setStatus('No audio shared. Choose a browser tab and enable “Share tab audio”.'); return;
     }
-    s.getVideoTracks().forEach(t => t.stop());
-    mark("bTab");
-    useSource(ctx.createMediaStreamSource(s), false, () => s.getTracks().forEach(t => t.stop()));
-    setStatus("Listening to the shared tab. Play your music there.");
-  } catch (e) { setStatus("Tab audio unavailable: " + e.message); }
+    useSource(ctx.createMediaStreamSource(stream), false, () => stream.getTracks().forEach(t => t.stop()));
+    mark(kind === 'mic' ? 'bMic' : 'bTab');
+    stream.getAudioTracks()[0].addEventListener('ended', () => { if (request === sourceRequest) stopAudio(); });
+    // Keep the shared video track alive for browsers that tie the audio session to it.
+    const settings = stream.getAudioTracks()[0].getSettings();
+    const processed = ['echoCancellation', 'noiseSuppression', 'autoGainControl'].filter(k => settings[k] === true);
+    setStatus(kind === 'mic' ? (processed.length ? 'Microphone connected. Device audio processing is still enabled.' : 'Microphone connected. Capture processing requested off; playback muted to prevent feedback.') : 'Listening to shared audio. Play your sound in the shared tab.');
+  } catch (error) { if (request === sourceRequest) setStatus((kind === 'mic' ? 'Microphone' : 'Shared audio') + ': ' + error.message); }
 }
-$("bDemo").onclick = startDemo; $("bTab").onclick = startTab;
-if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) $("bTab").disabled = true;
+function startTone() {
+  sourceRequest++; ensureCtx();
+  const oscillator = ctx.createOscillator(), gain = ctx.createGain();
+  gain.gain.value = 0.035;
+  oscillator.connect(gain); oscillator.start();
+  useSource(gain, true, () => { oscillator.stop(); oscillator.disconnect(); toneOsc = null; });
+  toneOsc = oscillator; mark('bTone'); updateTone();
+  setStatus('Move the frequency slider to explore the response. The digital spectrum can show tones your speakers cannot reproduce.');
+}
+function updateTone() {
+  const ceiling = Math.min(20000, RATE / 2 - 1);
+  const frequency = 20 * (ceiling / 20) ** (Number($('tone').value) / 1000);
+  $('toneValue').textContent = Math.round(frequency).toLocaleString() + ' Hz';
+  toneOsc?.frequency.setTargetAtTime(frequency, ctx.currentTime, 0.02);
+}
+$('bDemo').onclick = startDemo;
+$('bTab').onclick = () => capture('tab');
+$('bMic').onclick = () => capture('mic');
+$('bStop').onclick = stopAudio;
+$('bTone').onclick = startTone;
+$('tone').oninput = updateTone;
+$('bFile').onclick = () => $('fileInput').click();
+$('fileInput').onchange = async event => {
+  const file = event.target.files[0]; if (!file) return;
+  const request = ++sourceRequest;
+  ensureCtx();
+  const player = $('player');
+  player.pause();
+  if (fileUrl) URL.revokeObjectURL(fileUrl);
+  fileUrl = URL.createObjectURL(file); player.src = fileUrl;
+  mediaNode ||= ctx.createMediaElementSource(player);
+  useSource(mediaNode, true, () => player.pause()); mark('bFile');
+  try { await player.play(); if (request === sourceRequest) setStatus('Playing ' + file.name); }
+  catch (error) { if (request === sourceRequest) setStatus('Could not play this file: ' + error.message); }
+  event.target.value = '';
+};
+$('player').onended = () => { setStatus('File finished. Press play to listen again.'); };
+$('player').onerror = () => setStatus('This audio file could not be decoded. Try MP3, WAV, or another supported audio format.');
+$('sensitivity').oninput = event => {
+  const db = Number(event.target.value); $('sensitivityValue').textContent = '+' + db + ' dB';
+  inputGain?.gain.setTargetAtTime(10 ** (db / 20), ctx.currentTime, 0.03);
+};
+$('noiseFloor').oninput = event => { $('noiseFloorValue').textContent = event.target.value + ' dBFS'; if (wideband) wideband.floor = Number(event.target.value); };
+$('sandAmount').oninput = event => { sandAmount = Number(event.target.value) / 100; $('sandAmountValue').textContent = event.target.value + '%'; if (!plate.falling) plate.mass = sandAmount; };
+$('bReset').onclick = () => plate.reset();
+if (!navigator.mediaDevices?.getDisplayMedia) { $('bTab').disabled = true; $('bTab').title = 'Tab capture is not supported in this browser. Use a file or microphone.'; }
+if (!navigator.mediaDevices?.getUserMedia) { $('bMic').disabled = true; $('bMic').title = 'Microphone capture requires a supported browser and HTTPS.'; }
 
 // ============================================================ transforms
 function makeFFT(n) {
@@ -417,6 +482,10 @@ function initGpu() {
     const canvas = document.createElement("canvas"); canvas.width = canvas.height = GRID;
     const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, preserveDrawingBuffer: true });
     if (!gl || !gl.getExtension("EXT_color_buffer_float")) return null;
+    canvas.addEventListener('webglcontextlost', event => {
+      event.preventDefault(); plate.gpu = null; plate.reset();
+      setStatus('Graphics context lost. Continuing with CPU sand.');
+    });
     const prog = (vs, fs) => {
       const mk = (t, src) => { const sh = gl.createShader(t); gl.shaderSource(sh, src); gl.compileShader(sh);
         if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh; };
@@ -450,28 +519,32 @@ void main(){
     if(uFallT-16.0>delay){ v+=0.0016; p.y+=v; p.x+=n1*0.0015; }
     o=vec4(p,v,s.w); return;
   }
-  ivec2 fi=ivec2(min(int(p.x*${FG}.0),${FG - 1}),min(int(p.y*${FG}.0),${FG - 1}));
-  vec3 f=texelFetch(uField,fi,0).xyz;                                                  // E, dE/dx, dE/dy
-  vec2 g=uDrift*f.yz; float m=length(g); if(m>uMaxStep) g*=uMaxStep/m;
+  vec2 cell=clamp(p*${FG}.0-0.5,vec2(0.0),vec2(${FG-1}.0));
+  ivec2 fi=ivec2(floor(cell)), fj=min(fi+1,ivec2(${FG-1})); vec2 blend=fract(cell);
+  vec3 f=mix(mix(texelFetch(uField,fi,0).xyz,texelFetch(uField,ivec2(fj.x,fi.y),0).xyz,blend.x),
+             mix(texelFetch(uField,ivec2(fi.x,fj.y),0).xyz,texelFetch(uField,fj,0).xyz,blend.x),blend.y);                                                  // E, dE/dx, dE/dy
+  float stableStep=min(uDrift,0.45*f.x/(dot(f.yz,f.yz)+1e-8));
+  vec2 g=stableStep*f.yz; float m=length(g); if(m>uMaxStep) g*=uMaxStep/m;
   float kk=uKick*sqrt(max(f.x,0.0));
   p=abs(p-g+vec2(n1,n2)*kk);
   p=vec2(p.x>1.0?2.0-p.x:p.x, p.y>1.0?2.0-p.y:p.y); p=clamp(p,0.0,1.0);
   if(uCircle==1){ vec2 d=p-0.5; float q=dot(d,d); if(q>0.2401) p=0.5+d*(0.49/sqrt(q)); }
   o=vec4(p,s.z,s.w);
 }`);
-    const dots = prog(`precision highp float; uniform sampler2D uState; uniform float uActive;
+    const dots = prog(`precision highp float; uniform sampler2D uState; uniform float uActive; out float grainShade;
 void main(){ int gid=gl_VertexID; vec4 s=texelFetch(uState,ivec2(gid&${GPU_TEX - 1},gid>>9),0);
-  gl_PointSize=1.0;
+  gl_PointSize=1.2+s.w*0.9; grainShade=0.7+0.3*s.w;
   if(float(gid)>=uActive||s.y>1.0){ gl_Position=vec4(2.0,2.0,2.0,1.0); return; }
   gl_Position=vec4(s.x*2.0-1.0,s.y*2.0-1.0,0.0,1.0); }`,
-      `precision highp float; uniform float uW; out vec4 o; void main(){ o=vec4(uW,0.0,0.0,1.0); }`);
+      `precision highp float; uniform float uW; in float grainShade; out vec4 o; void main(){
+        vec2 q=gl_PointCoord*2.0-1.0; float coverage=1.0-smoothstep(0.45,1.0,length(q));
+        o=vec4(uW*coverage*grainShade,0.0,0.0,1.0); }`);
     const shade = prog(tri, `precision highp float; uniform sampler2D uDens; out vec4 o;
 float d(ivec2 c){ return (c.x<0||c.y<0||c.x>=${GRID}||c.y>=${GRID})?0.0:texelFetch(uDens,c,0).r; }
 void main(){
   ivec2 fc=ivec2(gl_FragCoord.xy), c=ivec2(fc.x,${GRID - 1}-fc.y);            // image row 0 is the top
-  float v=d(c)+0.5*(d(c+ivec2(1,0))+d(c-ivec2(1,0))+d(c+ivec2(0,1))+d(c-ivec2(0,1)));
-  float i=min(floor(v*2.0),63.0), t=1.0-exp(-i/2.0*0.9);
-  o=vec4(mix(vec3(26.0,29.0,36.0),vec3(226.0,196.0,140.0),t)/255.0,1.0);
+  float v=d(c), t=1.0-exp(-v*1.35);
+  o=vec4(mix(vec3(16.0,21.0,28.0),vec3(243.0,215.0,162.0),t)/255.0,1.0);
 }`);
     const tex = (w, h, ifmt, fmt, type, filter = gl.NEAREST) => {
       const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
@@ -511,7 +584,7 @@ void main(){
         gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
         gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
         gl.useProgram(dots.p); bind(0, st[cur]);
-        gl.uniform1i(dots.u.uState, 0); gl.uniform1f(dots.u.uActive, this.active || 0); gl.uniform1f(dots.u.uW, GRAINS / GPU_N);
+        gl.uniform1i(dots.u.uState, 0); gl.uniform1f(dots.u.uActive, this.active || 0); gl.uniform1f(dots.u.uW, 1.0);
         gl.drawArrays(gl.POINTS, 0, GPU_N);
         gl.disable(gl.BLEND);
         gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, GRID, GRID);
@@ -555,7 +628,7 @@ class Plate {
   }
   get analysis() { return this.useRft && this.banks.RFT ? "RFT" : "FFT"; }
   reset() {
-    this.mass = 0; this.falling = false; this.tuned = false;
+    this.mass = sandAmount; this.falling = false; this.tuned = false;
     if (this.gpu) { this.gpuReset = true; return; }          // the grains are re-scattered on the GPU
     const p = this.p, circle = this.shape === "circle";
     for (let i = 0; i < GRAINS; i++) {
@@ -565,20 +638,30 @@ class Plate {
     }
   }
 
+  clearAudio() {
+    this.amp.fill(0); this.ts.fill(0); this.hold.fill(0);
+    this.E.fill(0); this.EX.fill(0); this.EY.fill(0);
+    this.level = this.hit = this.pitch = this.freq = 0; this.top = null; this.tuned = false;
+    this.db = -120; this.dbRef = -40;
+    this.bflux = [1, 1, 1]; this.blast = [-99, -99, -99];
+    for (const bank of Object.values(this.banks)) { bank.ref = -60; bank.last = null; bank.sprev?.fill(0); }
+  }
   analyse(samples) {
     this.tick++;
     let ss = 0; for (let i = FFT_N - 2048; i < FFT_N; i++) ss += samples[i] * samples[i];
-    const rms = Math.sqrt(ss / 2048), db = 20 * Math.log10(rms + 1e-9);
+    const rms = Math.max(Math.sqrt(ss / 2048), wideband?.rms || 0, (wideband?.block || 0) * 0.5), db = 20 * Math.log10(rms + 1e-9);
     this.db += (db - this.db) * (db > this.db ? 0.6 : 0.12);
-    const silent = rms < 3e-4;
+    const silent = db < Number($('noiseFloor').value);
     if (silent) this.dbRef -= 0.2; else this.dbRef = Math.max(db, this.dbRef - 0.04, -60);
     const drive = silent ? 0 : clamp((db - (this.dbRef - 40)) / 40, 0, 1);
     this.level += (drive - this.level) * (drive > this.level ? 0.7 : 0.08);
-    this.hit *= 0.86; this.hitFlash *= 0.9;
+    this.hit = Math.max(this.hit * 0.86, silent ? 0 : (wideband?.flux || 0)); this.hitFlash *= 0.9;
 
-    const M = this.mf.length, tgt = new Float32Array(M), bank = this.banks[this.analysis];
+    // FFT magnitudes are stable for a steady tone; RFT coefficient phase variation
+    // must not be mistaken for repeated drum hits that continually scatter the sand.
+    const M = this.mf.length, tgt = new Float32Array(M), bank = this.banks.FFT;
     if (!silent && bank) {
-      if (!this.falling) this.mass = Math.min(1, this.mass + 0.0004 * this.level + 0.0016 * this.hit);
+      if (!this.falling) this.mass = sandAmount;
       // sustained resonance: every transform scores each mode against its own loudness
       // reference; a mode rings if any of them hears it (so no band is left to one transform's blind spot)
       const t = new Float32Array(M);
@@ -589,6 +672,21 @@ class Plate {
         for (let i = 0; i < M; i++) { const v = clamp((mdb[i] - (ear.ref - 36)) / 36, 0, 1); if (v * v > t[i]) t[i] = v * v; }
       }
       if (this.banks.PEAK) { const tv = this.banks.PEAK.tvec(); for (let i = 0; i < M; i++) if (tv[i] > t[i]) t[i] = tv[i]; }
+      // Full stereo coverage supplements the modal transforms. Absolute gating prevents
+      // normalizing tiny leakage into strong false modes for out-of-range tones.
+      if (wideband) for (let i = 0; i < M; i++) {
+        const db = wideband.at(this.mf[i]);
+        if (db < wideband.floor) t[i] = 0;
+        else t[i] = Math.max(t[i], clamp((db - wideband.floor) / 60, 0, 1) ** 2 * (0.35 + 0.65 * this.drive[i]));
+        // Broad FFT bins can energize many unrelated modes from one pure tone.
+        // Apply a damped resonator response to the measured peaks before mixing modes.
+        let response = 0;
+        for (const peak of wideband.peaks || []) {
+          const ratio = peak.frequency / this.mf[i];
+          response = Math.max(response, 1 / Math.sqrt(1 + (35 * (ratio - 1 / ratio)) ** 2));
+        }
+        t[i] *= response;
+      }
       // sand needs seconds to settle, so don't chase the instantaneous loudest modes: a mode's
       // score rises fast and falls slowly, and a mode picked into the top ten is held ~0.8 s
       for (let i = 0; i < M; i++) this.ts[i] += (t[i] - this.ts[i]) * (t[i] > this.ts[i] ? 0.25 : 0.04);
@@ -622,7 +720,7 @@ class Plate {
         if (!any) ref = Math.max(...sdb);
         const ts = new Float32Array(M);
         for (let i = 0; i < M; i++) if (hitBands.includes(this.mband[i])) { const v = clamp((sdb[i] - (ref - 24)) / 24, 0, 1); ts[i] = v * v; }
-        for (const i of topK(ts, 10)) this.amp[i] = Math.max(this.amp[i], ts[i] * (0.6 + 0.4 * strength));
+        for (const i of topK(ts, 10)) if (!wideband || wideband.at(this.mf[i]) >= wideband.floor) this.amp[i] = Math.max(this.amp[i], ts[i] * (0.6 + 0.4 * strength));
       }
     }
     for (let i = 0; i < M; i++) {
@@ -630,6 +728,13 @@ class Plate {
       if (this.amp[i] < 0.003) this.amp[i] = 0;
     }
     this.buildField();
+    // Out-of-resonance sound still shakes grains; it does not invent a modal pattern.
+    if (!silent && wideband) {
+      const broadband = Math.max(wideband.bass, wideband.mid, wideband.air, clamp((db - wideband.floor) / 60, 0, 1));
+      const background = 0.0015 * broadband;
+      for (let i = 0; i < this.E.length; i++) this.E[i] += background;
+      this.tuned = this.tuned || broadband > 0;
+    }
     this.updateLight();
   }
 
@@ -669,7 +774,7 @@ class Plate {
     let act = [];
     for (let i = 0; i < this.amp.length; i++) if (this.amp[i] > 0.02) act.push(i);
     const { E, EX, EY } = this;
-    if (!act.length) { E.fill(0); EX.fill(0); EY.fill(0); return; }
+    if (!act.length) { E.fill(0); EX.fill(0); EY.fill(0); this.freq = 0; this.top = null; return; }
     if (act.length > 16) act = act.sort((a, b) => this.amp[b] - this.amp[a]).slice(0, 16);
     let s2 = 1e-9; for (const i of act) s2 += this.amp[i] ** 2;
     E.fill(0); EX.fill(0); EY.fill(0);
@@ -714,8 +819,8 @@ class Plate {
 
   stepGpu() {
     const circle = this.shape === "circle", N = this.gpu.N;
-    if (this.gpuReset) {                           // re-scatter the grains, but the plate starts empty: draw none yet
-      this.gpuReset = false; this.gpu.step({ mode: 3, active: N, circle, drift: 0, kick: 0, fallT: 0 }); this.gpu.active = 0; return;
+    if (this.gpuReset) {                           // re-scatter the selected amount of sand
+      this.gpuReset = false; this.gpu.step({ mode: 3, active: N, circle, drift: 0, kick: 0, fallT: 0 }); this.gpu.active = Math.floor(this.mass * N); return;
     }
     if (this.falling) {
       this.fallT++;
@@ -724,10 +829,10 @@ class Plate {
       return;
     }
     const k = Math.floor(this.mass * N);
-    if (k < 1 || !this.tuned) { this.gpu.active = 0; return; }
+    if (k < 1 || !this.tuned) { this.gpu.active = Math.floor(this.mass * N); return; }
     let a = 0.18 + 0.82 * this.level;
     a = this.level > 0.02 ? Math.min(a + 1.4 * this.hit, 2.2) : 0;
-    this.gpu.step({ mode: 0, active: k, circle, drift: 0.0011 * a * 0.5, kick: 0.0048 * a + 0.016 * this.hit, fallT: 0 }, this.E, this.EX, this.EY);
+    this.gpu.step({ mode: 0, active: k, circle, drift: 0.008 * a, kick: 0.0012 * a + 0.008 * this.hit, fallT: 0 }, this.E, this.EX, this.EY);
   }
 
   step() {
@@ -737,12 +842,13 @@ class Plate {
     if (k < 1 || !this.tuned) return;
     let a = 0.18 + 0.82 * this.level;
     a = this.level > 0.02 ? Math.min(a + 1.4 * this.hit, 2.2) : 0;
-    const drift = 0.0011 * a * 0.5, kick = 0.0048 * a + 0.016 * this.hit, circle = this.shape === "circle";
+    const drift = 0.008 * a, kick = 0.0012 * a + 0.008 * this.hit, circle = this.shape === "circle";
     const { p, E, EX, EY } = this, MAXSTEP = 0.02;
     for (let i = 0; i < k; i++) {
       let x = p[2 * i], y = p[2 * i + 1];
       const idx = Math.min((y * FG) | 0, FG - 1) * FG + Math.min((x * FG) | 0, FG - 1);
-      let gx = drift * EX[idx], gy = drift * EY[idx];
+      const stableStep = Math.min(drift, 0.45 * E[idx] / (EX[idx] ** 2 + EY[idx] ** 2 + 1e-8));
+      let gx = stableStep * EX[idx], gy = stableStep * EY[idx];
       const mag = Math.hypot(gx, gy);                 // clamp the slide by magnitude, not per axis (no diagonal bias)
       if (mag > MAXSTEP) { gx *= MAXSTEP / mag; gy *= MAXSTEP / mag; }
       const kk = kick * Math.sqrt(E[idx]);
@@ -761,29 +867,46 @@ plate.gpu = initGpu();
 if (plate.gpu) plate.gpuReset = true;
 const cv = $("cv"), g = cv.getContext("2d");
 const off = document.createElement("canvas"); off.width = off.height = GRID;
-const og = off.getContext("2d"), img = og.createImageData(GRID, GRID), px = new Uint32Array(img.data.buffer);
-const dens = new Float32Array(GRID * GRID), sm = new Float32Array(GRID * GRID);
-const lut = new Uint32Array(64);
-for (let i = 0; i < 64; i++) {
-  const v = 1 - Math.exp(-i / 2 * 0.9), c = [26, 29, 36].map((b, j) => b + ([226, 196, 140][j] - b) * v);
-  lut[i] = (255 << 24) | (Math.round(c[2]) << 16) | (Math.round(c[1]) << 8) | Math.round(c[0]);
-}
+const og = off.getContext('2d');
 function renderSand() {
   if (plate.gpu) { plate.gpu.render(); return; }
-  dens.fill(0);
+  og.fillStyle = '#10151c'; og.fillRect(0, 0, GRID, GRID);
   const k = Math.floor(plate.mass * GRAINS), p = plate.p;
+  og.fillStyle = '#e8c68c';
   for (let i = 0; i < k; i++) {
-    const y = p[2 * i + 1]; if (y > 1) continue;
-    dens[(((y * (GRID - 1)) | 0) * GRID) + clamp(((p[2 * i] * (GRID - 1)) | 0), 0, GRID - 1)]++;
+    if (p[2*i+1] > 1) continue;
+    const size = 1 + (i % 3) * 0.25;
+    og.fillRect(p[2*i] * (GRID-1), p[2*i+1] * (GRID-1), size, size);
   }
-  for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) {
-    const o = y * GRID + x;
-    let v = dens[o];
-    if (y > 0) v += 0.5 * dens[o - GRID]; if (y < GRID - 1) v += 0.5 * dens[o + GRID];
-    if (x > 0) v += 0.5 * dens[o - 1]; if (x < GRID - 1) v += 0.5 * dens[o + 1];
-    px[o] = lut[Math.min((v * 2) | 0, 63)];
+}
+const spectrumCanvas = $('spectrum'), spectrumContext = spectrumCanvas.getContext('2d');
+let lastReadout = 0;
+function drawReadouts(t) {
+  const values = wideband?.values;
+  const width = spectrumCanvas.width, height = spectrumCanvas.height;
+  spectrumContext.clearRect(0, 0, width, height);
+  spectrumContext.strokeStyle = '#283642'; spectrumContext.lineWidth = 1;
+  for (let i = 1; i <= 3; i++) { const y = height*i/4; spectrumContext.beginPath(); spectrumContext.moveTo(0,y); spectrumContext.lineTo(width,y); spectrumContext.stroke(); }
+  if (values) for (let i = 0; i < values.length; i++) {
+    const h = clamp((values[i]+100)/90,0,1)*height;
+    spectrumContext.fillStyle = values[i] >= wideband.floor ? '#e8c68c' : '#425463';
+    spectrumContext.fillRect(i*width/values.length, height-h, Math.max(1,width/values.length-2),h);
   }
-  og.putImageData(img, 0, 0);
+  if (t-lastReadout < 100) return; lastReadout=t;
+  const active = !!srcNode || bow.down;
+  const db = wideband ? 20*Math.log10(wideband.rms+1e-12) : -120;
+  const audible = active && db >= Number($('noiseFloor').value);
+  $('pitchReadout').textContent = audible && wideband?.pitch ? wideband.pitch.toLocaleString(undefined,{maximumFractionDigits:1})+' Hz' : '— Hz';
+  $('levelReadout').textContent = active ? Math.max(-120,db).toFixed(1)+' dBFS' : '— dBFS';
+  $('modeReadout').textContent = audible && plate.freq ? Math.round(plate.freq).toLocaleString()+' Hz' : '— Hz';
+  $('meterFill').style.width = (active ? clamp((db+90)/90,0,1)*100 : 0)+'%';
+  const clipping = active && (wideband?.peak || 0) >= .99;
+  $('meter').classList.toggle('clip', clipping);
+  $('signalState').textContent = !active ? 'No input' : clipping ? 'Near full scale · lower gain' : audible ? 'Signal detected' : 'Below response threshold';
+  $('audioInfo').textContent = ctx ? (RATE/1000).toFixed(1)+' kHz · '+(wideband?.meterState === 'continuous' ? 'continuous meter' : 'frame meter') : '20 Hz–20 kHz analysis';
+  $('maxFrequency').textContent = ((wideband?.ceiling || 20000)/1000).toFixed(0)+'k';
+  $('grainLabel').textContent = Math.floor(plate.mass*(plate.gpu ? GPU_N : GRAINS)).toLocaleString()+' grains';
+  $('quality').textContent = (plate.gpu ? 'GPU' : 'CPU')+' / 1024 × 1024';
 }
 function draw(t) {
   const W = cv.width, pl = plate;
@@ -800,14 +923,7 @@ function draw(t) {
   } else g.strokeRect(1.5, 1.5, W - 3, W - 3);
   g.restore();
 
-  g.font = "600 17px system-ui, sans-serif"; g.textBaseline = "top";
-  let txt;
-  if (pl.level > 0.02 && pl.top) txt = `${noteName(pl.pitch || pl.freq)} · ${(pl.pitch || pl.freq).toFixed(0)} Hz · ${pl.db.toFixed(0)} dB · mode ${pl.top[0]},${pl.top[1]}`;
-  else if (pl.useRft && pl.rftState === "building") txt = "loading…";
-  else txt = ctx ? "listening…" : "";
-  g.fillStyle = "rgba(235,225,200,.8)"; g.fillText(txt, 14, 12);
-  g.fillStyle = "rgba(0,0,0,.45)"; g.fillRect(14, 40, 150, 6);
-  g.fillStyle = "rgba(226,196,140,.9)"; g.fillRect(14, 40, 150 * Math.min(pl.level, 1), 6);
+  drawReadouts(t);
   // the only colour: a faint glow behind the plate, in the pitch's colour
   const st = document.documentElement.style;
   st.setProperty("--glow", pl.light.map(c => Math.round(c * 255)).join(","));
@@ -816,9 +932,17 @@ function draw(t) {
 let last = 0;
 function loop(t) {
   requestAnimationFrame(loop);
-  if (t - last < 15) return;                  // cap near 60 fps
-  last = t;
-  if (analyser) analyser.getFloatTimeDomainData(buf);
+  if (t - last < 1000 / 60) return;
+  last = t - ((t - last) % (1000 / 60));
+  if (analyser && (srcNode || bow.down || bow.speed > 0.001)) analyser.getFloatTimeDomainData(buf);
+  else buf.fill(0);
+  if (wideband) {
+    wideband.read(buf);
+    if (!srcNode && !bow.down && bow.speed <= 0.001) {
+      wideband.rms = wideband.peak = wideband.block = wideband.pitch = wideband.flux = 0;
+      wideband.bass = wideband.mid = wideband.air = 0; wideband.values.fill(-120);
+    }
+  }
   bowUpdate();
   plate.analyse(buf);
   plate.step();
@@ -837,7 +961,7 @@ const bow = { down: false, x: .5, y: .5, t: 0, speed: 0, bus: null, oscs: [], ga
 function bowSetup() {
   if (bow.bus) return;
   bow.bus = ctx.createGain(); bow.bus.gain.value = 0.9;
-  bow.bus.connect(analyser); bow.bus.connect(ctx.destination);
+  bow.bus.connect(inputGain); bow.bus.connect(ctx.destination);
   for (let k = 0; k < 6; k++) {
     const o = ctx.createOscillator(), gn = ctx.createGain(); gn.gain.value = 0;
     o.connect(gn); gn.connect(bow.bus); o.start(); bow.oscs.push(o); bow.gains.push(gn);
@@ -845,7 +969,7 @@ function bowSetup() {
 }
 function bowPos(e) { const r = cv.getBoundingClientRect(); return [clamp((e.clientX - r.left) / r.width, 0, 1), clamp((e.clientY - r.top) / r.height, 0, 1)]; }
 cv.addEventListener("pointerdown", e => {
-  ensureCtx(); bowSetup(); cv.setPointerCapture(e.pointerId); cv.style.cursor = "grabbing";
+  ensureCtx(); bowSetup(); $('empty').hidden = true; $('bStop').disabled = false; cv.setPointerCapture(e.pointerId); cv.style.cursor = "grabbing";
   [bow.x, bow.y] = bowPos(e); bow.t = performance.now(); bow.down = true;
 });
 cv.addEventListener("pointermove", e => {
@@ -855,7 +979,7 @@ cv.addEventListener("pointermove", e => {
   bow.x = x; bow.y = y; bow.t = now;
 });
 const bowEnd = () => { bow.down = false; cv.style.cursor = "grab"; };
-cv.addEventListener("pointerup", bowEnd); cv.addEventListener("pointercancel", bowEnd);
+cv.addEventListener("pointerup", bowEnd); cv.addEventListener("pointercancel", bowEnd); cv.addEventListener("lostpointercapture", bowEnd);
 function bowUpdate() {
   if (!bow.bus) return;
   bow.speed *= 0.9;                              // rosin: no motion, no sound
@@ -875,7 +999,8 @@ async function useShape(shape) {
   try {
     modeSets[shape] = modeSets[shape] || await loadModeSet(shape);
     plate.setModes(modeSets[shape], shape);
-    $("bShape").textContent = shape === "square" ? "◯ Circular plate" : "▢ Square plate";
+    $('shapeLabel').textContent = shape === 'square' ? '01 / Square plate' : '02 / Circular plate';
+    $("bShape").textContent = shape === "square" ? "Circular plate" : "Square plate";
   } catch (e) { setStatus("Couldn't load the " + shape + " plate (" + e.message + ")."); }
 }
 $("bShape").onclick = async () => { $("bShape").disabled = true; await useShape(plate.shape === "square" ? "circle" : "square"); $("bShape").disabled = false; };
