@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cymantix</title>
-<meta name="description" content="A Chladni sand plate that reacts to music, analysed through the Resonant Fourier Transform.">
+<meta name="description" content="A Chladni sand plate that reacts to music.">
 <style>
   :root {
     --bg: #14161b; --panel: #1c1f26; --line: #2c313b; --text: #efe9da;
@@ -41,22 +41,17 @@
 </head>
 <body>
 <h1>CYMANTIX</h1>
-<p class="sub">A Chladni sand plate driven by whatever you play, heard through the Resonant Fourier Transform.</p>
+<p class="sub">A Chladni sand plate driven by whatever you play.</p>
 
 <div class="wrap">
   <div class="plate"><canvas id="cv" width="640" height="640"></canvas></div>
   <div class="row">
     <button class="go" id="bDemo">▶ Demo</button>
-    <button id="bFile">♪ Audio file…</button>
     <button id="bTab">🖥 Tab / system audio</button>
-    <button id="bMic">🎤 Mic</button>
   </div>
   <div class="row">
-    <button id="bAn" class="on">Analysis: RFT</button>
     <button id="bShake">⟲ Shake off</button>
   </div>
-  <audio id="au" controls></audio>
-  <input type="file" id="fi" accept="audio/*" hidden>
   <div class="status" id="st">Pick a source to start. Nothing leaves your browser.</div>
 
   <details>
@@ -65,11 +60,6 @@
        φ = cos(nπx)cos(mπy) − s·cos(mπx)cos(nπy) at f ≈ F₀(n²+m²). Each mode is
        driven by the sound energy near its own resonance, and the sand slides toward the
        nodal lines, as on a real Chladni plate. Loudness (dB) sets how hard the plate is driven.</p>
-    <p>The ear of the plate is the RFT: nodes f<sub>k</sub> = {(k+1)φ}, Φ<sub>nk</sub> =
-       N<sup>-1/2</sup>e<sup>i2πf<sub>k</sub>n</sup>, and the unitary
-       U = Φ(Φ†Φ)<sup>-1/2</sup>, computed offline at Fibonacci dimensions
-       (N = 1597 and 610 here; the desktop app uses 2584 and 987). Toggle to the plain FFT to compare.
-       No advantage over the FFT is claimed: the finite construction is valid, and that's all this uses.</p>
     <p><a href="https://github.com/Anharmoniclabs/cymantix">Source &amp; desktop app</a></p>
   </details>
 </div>
@@ -106,18 +96,17 @@ function useSource(node, audible, stop) {
   if (srcNode) try { srcNode.disconnect(); } catch (e) {}
   srcNode = node;
   node.connect(analyser);
-  outGain.gain.value = audible ? 1 : 0;      // mic / captured tab must not echo back
+  outGain.gain.value = audible ? 1 : 0;      // captured tab must not echo back
 }
 const $ = id => document.getElementById(id);
 const setStatus = t => $("st").textContent = t;
 function mark(id) {
-  for (const b of ["bDemo", "bFile", "bTab", "bMic"]) $(b).classList.toggle("go", b === id);
+  for (const b of ["bDemo", "bTab"]) $(b).classList.toggle("go", b === id);
 }
 
 // -- demo: slow chord progression with a soft kick, so transients show too
 function startDemo() {
   ensureCtx(); mark("bDemo");
-  $("au").pause(); $("au").style.display = "none";
   const bus = ctx.createGain(); bus.gain.value = 0.5;
   const chords = [[110, 165, 220], [98, 147, 196], [131, 196, 262], [123, 185, 247]];
   const oscs = [0, 1, 2].map(() => { const o = ctx.createOscillator(); o.type = "triangle";
@@ -135,17 +124,6 @@ function startDemo() {
   useSource(bus, true, () => { clearInterval(t1); clearInterval(t2); oscs.forEach(o => o.stop()); });
   setStatus("Demo: chord progression + kick.");
 }
-function pickFile() { $("fi").click(); }
-$("fi").onchange = e => {
-  const f = e.target.files[0]; if (!f) return;
-  ensureCtx(); mark("bFile");
-  const au = $("au");
-  au.src = URL.createObjectURL(f); au.style.display = "block";
-  const node = au._node || (au._node = ctx.createMediaElementSource(au));
-  useSource(node, true, () => au.pause());
-  au.play().catch(() => setStatus("Press play on the player below."));
-  setStatus(f.name);
-};
 async function startTab() {
   try {
     ensureCtx();
@@ -155,23 +133,12 @@ async function startTab() {
       setStatus("No audio shared. Pick a tab and tick “Share tab audio”."); return;
     }
     s.getVideoTracks().forEach(t => t.stop());
-    $("au").pause(); $("au").style.display = "none"; mark("bTab");
+    mark("bTab");
     useSource(ctx.createMediaStreamSource(s), false, () => s.getTracks().forEach(t => t.stop()));
     setStatus("Listening to the shared tab. Play your music there.");
   } catch (e) { setStatus("Tab audio unavailable: " + e.message); }
 }
-async function startMic() {
-  try {
-    ensureCtx();
-    const s = await navigator.mediaDevices.getUserMedia(
-      { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-    $("au").pause(); $("au").style.display = "none"; mark("bMic");
-    useSource(ctx.createMediaStreamSource(s), false, () => s.getTracks().forEach(t => t.stop()));
-    setStatus("Listening to the microphone.");
-  } catch (e) { setStatus("Microphone unavailable: " + e.message); }
-}
-$("bDemo").onclick = startDemo; $("bFile").onclick = pickFile;
-$("bTab").onclick = startTab; $("bMic").onclick = startMic;
+$("bDemo").onclick = startDemo; $("bTab").onclick = startTab;
 if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) $("bTab").disabled = true;
 
 // ============================================================ transforms
@@ -481,9 +448,9 @@ function draw() {
   g.restore();
   g.fillStyle = "rgba(235,225,200,.8)"; g.font = "600 17px system-ui, sans-serif"; g.textBaseline = "top";
   let txt;
-  if (pl.level > 0.02 && pl.top) txt = `${pl.db.toFixed(0)} dB · ${pl.freq.toFixed(0)} Hz · mode ${pl.top[0]},${pl.top[1]} · ${pl.analysis}`;
-  else if (pl.useRft && pl.rftState === "building") txt = "loading RFT…";
-  else txt = (ctx ? "listening… " : "") + pl.analysis;
+  if (pl.level > 0.02 && pl.top) txt = `${pl.db.toFixed(0)} dB · ${pl.freq.toFixed(0)} Hz · mode ${pl.top[0]},${pl.top[1]}`;
+  else if (pl.useRft && pl.rftState === "building") txt = "loading…";
+  else txt = ctx ? "listening…" : "";
   g.fillText(txt, 14, 12);
   g.fillStyle = "rgba(0,0,0,.45)"; g.fillRect(14, 40, 150, 6);
   g.fillStyle = "rgba(226,196,140,.9)"; g.fillRect(14, 40, 150 * Math.min(pl.level, 1), 6);
@@ -503,18 +470,12 @@ function loop(t) {
 requestAnimationFrame(loop);
 
 $("bShake").onclick = () => plate.shakeOff();
-$("bAn").onclick = () => {
-  plate.useRft = !plate.useRft;
-  $("bAn").classList.toggle("on", plate.useRft);
-  $("bAn").textContent = "Analysis: " + (plate.useRft ? "RFT" : "FFT");
-};
-
-// matrices load in the background; the plate hears through the FFT until they're in
+// matrices load in the background; until they're in, the plate uses a plain spectrum
 Promise.all([loadRft(RFT_LONG), loadRft(RFT_SHORT)]).then(d => {
   plate.rftData = d;
   if (ctx) plate.banks.RFT = rftBank(plate.mf, ...d);
   plate.rftState = "ready";
-}).catch(e => { plate.rftState = "failed"; setStatus("RFT data failed to load (" + e.message + "); using FFT."); });
+}).catch(e => { plate.rftState = "failed"; setStatus("Analysis data failed to load (" + e.message + "); using fallback."); });
 </script>
 </body>
 </html>
