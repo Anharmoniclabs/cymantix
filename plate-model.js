@@ -10,7 +10,7 @@ function actuatorDrive(set, i, grid) {
 }
 class PhysicalPlateModel {
   constructor(context, input, receive, fail) {
-    this.context=context;this.input=input;this.receive=receive;this.fail=fail;this.revision=0;this.scale=1;
+    this.context=context;this.input=input;this.receive=receive;this.fail=fail;this.revision=0;
     this.ready=this.start();
   }
   async start() {
@@ -28,16 +28,14 @@ class PhysicalPlateModel {
       if(this.set)this.configure(this.set);
     } catch(error) {this.fail('Continuous plate simulation is unavailable: '+error.message);}
   }
-  retune(scale) {this.scale=scale;this.configure(this.set);}
   configure(set) {
-    if(set!==this.set)this.scale=1;
     this.set=set;this.revision++;
     if(!this.node || !set.physical)return;
     const {material,sideM}=VirtualPlate, grid=Math.sqrt(set.W.length/set.f.length);
     const cellArea=sideM*sideM/(grid*grid);
     const frequencies=[],gains=[],weights=[];this.indices=[];
     for(let i=0;i<set.f.length;i++) {
-      const frequency=set.f[i]*this.scale;
+      const frequency=set.f[i];
       if(frequency>=this.context.sampleRate/2)continue;
       const offset=i*grid*grid;let integral=0;
       for(let k=0;k<grid*grid;k++)integral+=set.W[offset+k]**2;

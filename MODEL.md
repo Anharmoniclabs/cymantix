@@ -25,17 +25,15 @@ GPU path only advances and renders the grains; it does not choose the pattern.
 For transport the field is divided by its own maximum, so the pattern shape stays visible at any
 music level; the absolute acceleration only sets the shaking level (sand mobility and the meter).
 
-Figure ladder and tuning (ideas from chladni-tui's mode ladder and Chladni's centre-bolted plate):
-the square is driven at its centre, so only its 20 fully symmetric modes ring; the circle on a
-diameter at r = 0.6, so each degenerate pair rings only its cos member. These modes, lowest first,
-form a ladder. The peak of a ~0.5 s smoothed spectrum (with hysteresis, so a chord does not flip
-between its notes) is placed on the ladder by its position between 65 Hz and 1.1 kHz, and the
-whole mode set is scaled so that pitch sits exactly on the chosen mode's resonance. A new figure
-is held at least 1.2 s and the plate is jolted as it changes. The chosen mode's shape alone guides
-the sand (before the first lock, the ladder mode the solver rings hardest); mixing modes would
-leave sand only where every nodal set crosses, which reads as scattered dots. The pitch peak is
-tilted by sqrt(f) toward melody and chords so drums and bass do not pick every figure, and the
-shaking level is measured against the recent peak, so quiet tab audio works as well as loud. Mode shapes and per-mode physics are unchanged; the plate is a tunable one.
+Choosing the figure: the plate keeps its real mode frequencies (no retuning). The ~0.7 s smoothed
+power spectrum is passed through each mode's resonance curve, `R = 1/(1+(Q(r−1/r))²)` with
+`Q = 1/(2ζ)`, and the mode the music drives hardest is shown; a note between modes drives the
+nearer one harder, and overtones can ring a higher mode. Power is tilted by `f` so drums and bass
+do not pick every figure. One mode is shown at a time, held at least 1.2 s, with a jolt as it
+changes: a literal superposition of all excited modes leaves sand only where every nodal set
+crosses, which reads as scattered dots. The mode shapes are solved offline from plate physics;
+the grains are simulated live and form the figure themselves. The shaking level is measured
+against the recent peak, so quiet tab audio works as well as loud.
 
 The circular option uses clamped Kirchhoff plate modes. Its radial profiles satisfy the
 clamped boundary equation and are checked by `tools/export_clamped_circle.py`.

@@ -65,8 +65,8 @@
   <details>
     <summary>What am I looking at?</summary>
     <p>Incoming audio drives a modeled 1 mm steel plate, each mode a damped oscillator at the
-       audio sample rate. The plate is tuned to the music: the dominant pitch picks a figure,
-       low notes simple ones and high notes intricate ones, and the sand gathers on its nodal lines.</p>
+       audio sample rate. The figure is the plate mode the music drives hardest at its real
+       resonance frequency (shown in the label), and the sand gathers on its nodal lines.</p>
     <p>The square has free edges; the circular plate has a clamped edge. This is a
        numerically defined virtual plate, not a measurement of a physical one.
        The sand transport is approximate. <a href="MODEL.md">Model, limits &amp; verification</a>.</p>
@@ -562,9 +562,7 @@ class Plate {
     this.mband = this.mf.map(f => f < 250 ? 0 : f < 2500 ? 1 : 2);
     this.amp = new Float32Array(M); this.ts = new Float32Array(M); this.hold = new Int32Array(M);
     this.drive = Float32Array.from({ length: M }, (_, i) => Math.abs(actuatorDrive(set, i, FG)));
-    // The figure ladder: every mode the actuator can ring, simplest (lowest) first.
-    this.ladder = Array.from(set.f.keys()).filter(i => this.drive[i] > .12).sort((a, b) => set.f[a] - set.f[b]);
-    this.rung = -1; this.tuneAt = 0; this.tuneHeld = 0; this.tuneRung = -1; this.tuneBin = 0;
+    this.figure = -1; this.figureNext = -1; this.figureAt = 0; this.figureHeld = 0;
     this.top = null; this.freq = 0; this.pendingReport = null;
     this.E.fill(0); this.EX.fill(0); this.EY.fill(0); this.fieldMode = -1;
     physicalModel?.configure(set);
@@ -597,7 +595,7 @@ class Plate {
     const now = performance.now(); this.dt = Math.min(.5, Math.max(report.seconds, (now - (this.lastT || now)) / 1000)); this.lastT = now;
     this.db = 20 * Math.log10(report.rms + 1e-12);
     this.banks.FFT?.db(samples);
-    this.autoTune(report);
+    this.chooseFigure(report);
     let peak = 0;
     for (let i=0;i<this.amp.length;i++) { this.amp[i] = Math.sqrt(report.energy[i]) / VirtualPlate.material.gravity; peak = Math.max(peak,this.amp[i]); }
     this.hit *= Math.exp(-this.dt / .2);
@@ -636,51 +634,50 @@ class Plate {
     this.glow += (gt - this.glow) * 0.012;
   }
 
-  autoTune(report) {
-    // Pitch picks the figure, as on a tunable plate (borrowed from chladni-tui's mode ladder):
-    // the dominant pitch's place between 65 Hz and 1.1 kHz picks a rung of the centre-driven
-    // modes, so low notes draw simple figures and high notes intricate ones. The whole mode set
-    // is then scaled so that pitch sits exactly on the rung's resonance and the solver rings it.
-    // A new figure is held >= 1.2 s, because sand needs time to draw it.
-    const spec = this.banks.FFT?.spec, model = physicalModel, L = this.ladder.length;
-    if (!spec || !model || !model.node || !this.set.physical || !L) return;
-    const df = RATE / FFT_N, lo = Math.max(2, Math.ceil(40 / df)), hi = Math.min(spec.length - 3, Math.floor(4000 / df));
-    // Pick the peak of a ~0.5 s smoothed spectrum (as chladni-tui does), not the instantaneous
-    // one, which flips between chord tones and drum hits every report.
+  chooseFigure(report) {
+    // True to frequency: the plate keeps its real mode frequencies, and the figure is the mode the
+    // music drives hardest through its own resonance. Harmonics count, so a note far from any mode
+    // can still ring a higher one through its overtones. One mode is shown, held >= 1.2 s.
+    const spec = this.banks.FFT?.spec, M = this.mf.length;
+    if (!spec || !M) return;
+    const df = RATE / FFT_N;
+    // ~0.7 s smoothed spectrum (as chladni-tui does), not the instantaneous one, which flips
+    // between chord tones and drum hits on every frame.
     if (!this.smoothSpec || this.smoothSpec.length !== spec.length) this.smoothSpec = new Float32Array(spec.length);
     const sm = this.smoothSpec, k = 1 - Math.exp(-this.dt / .7);
     for (let j = 0; j < sm.length; j++) sm[j] += (spec[j] - sm[j]) * k;
-    // Tilt toward melody and chords: kick drums and bass would otherwise pick every figure.
-    if (!this.tilt || this.tilt.length !== sm.length) this.tilt = Float32Array.from(sm, (_, j) => Math.sqrt(Math.max(j * df, 1) / 100));
-    const tilt = this.tilt;
-    let gk = lo; for (let j = lo; j <= hi; j++) if (sm[j] * tilt[j] > sm[gk] * tilt[gk]) gk = j;
-    if (report.rms < 1e-4 || sm[gk] < 1e-7) { this.tuneHeld = 0; return; }
-    // Hysteresis: in a chord of equal notes, stay on the current one until another is clearly louder.
-    if (this.tuneBin) {
-      let kb = Math.max(lo, this.tuneBin - 2); for (let j = kb; j <= Math.min(hi, this.tuneBin + 2); j++) if (sm[j] * tilt[j] > sm[kb] * tilt[kb]) kb = j;
-      if (sm[kb] * tilt[kb] > .6 * sm[gk] * tilt[gk]) gk = kb;
+    if (report.rms < 1e-4) { this.figureHeld = 0; return; }
+    // Each mode's driven response: smoothed power spectrum through the mode's resonance curve
+    // R = 1/(1+(Q(r-1/r))^2), Q = 1/(2 zeta), so a note between two modes drives the nearer one
+    // harder. Music's spectrum falls with frequency; an f tilt on power keeps kick and bass from
+    // winning every time, so melody and chords get their share.
+    const Q = 1 / (2 * VirtualPlate.material.dampingRatio), score = new Float32Array(M); let best = -1;
+    for (let i = 0; i < M; i++) {
+      const f = this.mf[i]; if (f > 7500) continue;
+      const j0 = Math.max(2, Math.floor(f * .75 / df)), j1 = Math.min(sm.length - 1, Math.ceil(f * 1.33 / df));
+      let power = 0;
+      for (let j = j0; j <= j1; j++) { const r = j * df / f, x = Q * (r - 1 / r); power += sm[j] * sm[j] / (1 + x * x); }
+      score[i] = power * f / 100;
+      if (best < 0 || score[i] > score[best]) best = i;
     }
-    this.tuneBin = gk;
-    const P = interp(sm, gk);
-    const u = clamp(Math.log2(P / 65) / Math.log2(1100 / 65), 0, 1), rung = Math.round(u * (L - 1));
-    if (rung !== this.tuneRung) { this.tuneRung = rung; this.tuneHeld = 0; } else this.tuneHeld += this.dt;
-    if (this.tuneHeld < .3) return;                        // 0.3 s on one rung
-    const now = performance.now(), base = this.set.f[this.ladder[this.rung < 0 ? rung : this.rung]];
-    if (rung !== this.rung) {
-      if (this.rung >= 0 && now - this.tuneAt < 1200) return;
-      this.rung = rung; this.tuneAt = now; this.hit = .8;   // the plate jolts as the figure changes, re-spreading the sand
-      model.retune(P / this.set.f[this.ladder[rung]]);
-    } else if (Math.abs(Math.log(P / (base * model.scale))) > .02) model.retune(P / base);   // follow the note within a figure
+    if (best < 0 || score[best] < 1e-14) return;
+    const cur = this.figure;
+    if (cur >= 0 && score[cur] > score[best] / 2) best = cur;   // hysteresis: switch only for a clearly stronger mode
+    if (best !== this.figureNext) { this.figureNext = best; this.figureHeld = 0; } else this.figureHeld += this.dt;
+    const now = performance.now();
+    if (best === cur || this.figureHeld < .3 || (cur >= 0 && now - this.figureAt < 1200)) return;
+    this.figure = best; this.figureAt = now; this.hit = .6;        // the plate jolts as the figure changes, re-spreading the sand
   }
 
+
   buildField(report) {
-    // One held figure at a time (as in chladni-tui): the tuned rung, or before the first lock the
-    // ladder mode the solver rings hardest. Mixing modes leaves sand only where every nodal set
+    // One held figure at a time (as in chladni-tui): the chosen mode, or before the first choice
+    // the mode the solver rings hardest. Mixing modes leaves sand only where every nodal set
     // crosses, which reads as scattered dots. The solver's energies set how hard the plate shakes.
     const {E,EX,EY}=this, size=FG*FG, W=this.set.W, energy=report.energy;
     let loudest=0;for(const e of energy)loudest=Math.max(loudest,e);
-    let mode=this.rung>=0?this.ladder[this.rung]:-1;
-    if(mode<0&&loudest>0)for(const i of this.ladder)if(mode<0||energy[i]>energy[mode])mode=i;
+    let mode=this.figure;
+    if(mode<0&&loudest>0)for(let i=0;i<energy.length;i++)if(mode<0||energy[i]>energy[mode])mode=i;
     if(mode>=0&&mode!==this.fieldMode) {
       this.fieldMode=mode;let peak=1e-12;const a=mode*size;
       for(let k=0;k<size;k++){E[k]=W[a+k]*W[a+k];peak=Math.max(peak,E[k]);}
@@ -697,7 +694,7 @@ class Plate {
     this.shakeRef=live?Math.max(dB,(this.shakeRef??dB)-4*this.dt):this.shakeRef;
     const target=live?clamp((dB-(this.shakeRef-30))/30,0,1):0;
     this.level+=(target-this.level)*(target>this.level?.6:.12);
-    if(mode>=0&&live) {this.freq=this.mf[mode]*(physicalModel?.scale||1);this.top=[this.set.la[mode],this.set.lb[mode]];this.tuned=true;}
+    if(mode>=0&&live) {this.freq=this.mf[mode];this.top=[this.set.la[mode],this.set.lb[mode]];this.tuned=true;}
     else if(!live) this.top=null;
     this.coverage=1;
   }
@@ -803,7 +800,7 @@ function draw(t) {
   g.save(); g.scale(W / 640, W / 640);
   g.font = "600 17px system-ui, sans-serif"; g.textBaseline = "top";
   let txt;
-  if (pl.top) txt = `${noteName(pl.pitch || pl.freq)} · ${(pl.pitch || pl.freq).toFixed(0)} Hz · ${pl.db.toFixed(0)} dBFS · mode ${pl.top[0]},${pl.top[1]}`;
+  if (pl.top) txt = `${noteName(pl.pitch || pl.freq)} · ${(pl.pitch || pl.freq).toFixed(0)} Hz · ${pl.db.toFixed(0)} dBFS · mode ${pl.top[0]},${pl.top[1]} (${pl.freq.toFixed(0)} Hz)`;
   else if (!pl.set.physical || (ctx && !pl.lastReport)) txt = "loading plate model…";
   else txt = ctx ? "listening…" : "";
   if (pl.coverage < .95 && pl.top) txt += ` · field ${Math.round(pl.coverage*100)}%`;
