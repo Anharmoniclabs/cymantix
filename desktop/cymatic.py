@@ -219,60 +219,6 @@ class Mpris:
         self._stop = True
 
 
-# ------------------------------------------------------------ colour of pitch
-# Transpose a sound frequency up by whole octaves until it lands in the visible band
-# (405-810 THz is exactly one octave), then turn that light frequency into RGB. Every
-# pitch class gets the colour it would have if the note were light: A440 is orange-red,
-# C4 is green, and an octave up or down never changes the hue.
-def wavelength_rgb(w):
-    r = g = b = 0.0
-    if w < 440: r, b = (440 - w) / 60, 1.0
-    elif w < 490: g, b = (w - 440) / 50, 1.0
-    elif w < 510: g, b = 1.0, (510 - w) / 20
-    elif w < 580: r, g = (w - 510) / 70, 1.0
-    elif w < 645: r, g = 1.0, (645 - w) / 65
-    else: r = 1.0
-    k = (0.35 + 0.65 * (w - 380) / 40 if w < 420
-         else 0.35 + 0.65 * (750 - w) / 50 if w > 700 else 1.0)
-    return (np.array([r, g, b]) * k) ** 0.8
-
-
-def pitch_color(f):
-    fl = f * 2.0 ** 40
-    while fl < 405e12: fl *= 2
-    while fl >= 810e12: fl /= 2
-    return wavelength_rgb(min(max(299792458 / fl * 1e9, 380), 750))
-
-
-NOTES = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"]
-
-
-def note_name(f):
-    x = 12 * math.log2(f / 440) + 69
-    n = round(x)
-    c = round((x - n) * 100)
-    return f"{NOTES[n % 12]}{n // 12 - 1}" + (f" {c:+d}¢" if abs(c) >= 5 else "")
-
-
-def interp(spec, k):
-    """Parabolic peak interpolation on log magnitudes -> frequency in Hz."""
-    a, b, c = (math.log(float(spec[k + j]) + 1e-12) for j in (-1, 0, 1))
-    d = 0.5 * (a - c) / (a - 2 * b + c)
-    return (k + min(max(d, -0.5), 0.5)) * RATE / FFT_N
-
-
-def peak_near(spec, f0, span, floor):
-    """Strongest genuine local maximum within +-span of f0 (0 if none)."""
-    df = RATE / FFT_N
-    lo = max(2, int(f0 * (1 - span) / df))
-    hi = min(len(spec) - 3, math.ceil(f0 * (1 + span) / df))
-    k = -1
-    for i in range(lo, hi + 1):
-        if spec[i] > spec[i - 1] and spec[i] >= spec[i + 1] and (k < 0 or spec[i] > spec[k]):
-            k = i
-    return 0.0 if k < 0 or spec[k] < floor or spec[k] < 1e-6 else interp(spec, k)
-
-
 # ----------------------------------------------------------------------- RFT
 # Resonant Fourier Transform (Minier, "What I Got Wrong", Eqs. 1-2):
 #   f_k = {(k+1) phi},  Phi_nk = N^-1/2 exp(i 2 pi f_k n),  U = Phi (Phi^H Phi)^-1/2
@@ -317,11 +263,10 @@ class Bank:
         self.sprev = np.zeros(len(fshort), dtype=np.float32)
         self.fluxnorm = fluxnorm
         self.ref = -60.0       # this transform's own loudness reference
-        self.spec = None       # latest magnitudes (the lamp reads true pitch off these)
 
     def db(self, s):
         """dB in each plate mode's band (long window), plus the spectral peak."""
-        spec = self.spec = self.long(s)
+        spec = self.long(s)
         cs = np.concatenate(([0.0], np.cumsum(spec.astype(np.float64) ** 2)))
         e = np.sqrt((cs[self.hi] - cs[self.lo]) / (self.hi - self.lo))
         return (20 * np.log10(e + 1e-9),
@@ -467,37 +412,6 @@ class Plate:
         self.last_hit = 0.0
         self.freq = 0.0
         self.top_mode = None
-        self.light = np.array([0.89, 0.77, 0.55])   # lamp colour: additive mix of ringing pitches
-        self.glow = 0.0                              # lamp brightness
-        self.pitch = 0.0                             # true pitch of the strongest mode, Hz
-
-    def true_pitch(self, spec, i):
-        """Pitch actually heard near mode i; if nothing real is near it (the plate
-        has no resonance there), the strongest tone anywhere in the spectrum."""
-        if spec is None:
-            return float(self.mf[i])
-        df = RATE / FFT_N
-        lo, hi = max(2, math.ceil(35 / df)), min(len(spec) - 3, int(7500 / df))
-        gk = lo + int(np.argmax(spec[lo:hi + 1]))
-        return (peak_near(spec, self.mf[i], 0.12, 0.3 * float(spec[gk]))
-                or interp(spec, gk))
-
-    def update_light(self):
-        spec = self.banks["FFT"].spec if self.on["FFT"] else None
-        act = np.nonzero(self.amp > 0.05)[0]
-        if len(act):
-            act = act[np.argsort(self.amp[act])[::-1][:3]]
-            acc = np.zeros(3)
-            for n, i in enumerate(act):
-                fp = self.true_pitch(spec, i)
-                if n == 0:
-                    self.pitch = fp
-                acc += self.amp[i] ** 2 * pitch_color(fp)
-            if acc.max() > 0:
-                self.light += (acc / acc.max() - self.light) * 0.015      # ~1 s: hue never jumps
-        # follows average loudness slowly and tops out low: no beat-synced flicker
-        gt = 0.35 + 0.35 * self.level if self.level > 0.02 else 0.0
-        self.glow += (gt - self.glow) * 0.012
 
     def _load_rft(self):
         try:
@@ -587,7 +501,6 @@ class Plate:
         self.amp += (tgt - self.amp) * np.where(tgt > self.amp, 0.6, 0.07)
         self.amp[self.amp < 0.003] = 0
         self._build_field()
-        self.update_light()
 
     def _build_field(self):
         act = np.nonzero(self.amp > 0.02)[0]
@@ -709,7 +622,14 @@ class Widget(QWidget):
 
         self.plate = Plate()
         self.img = QImage(GRID, GRID, QImage.Format.Format_ARGB32)
-        self.lighting = True
+        self.sand = np.array([226, 196, 140], dtype=np.float32)
+        # colour lookup: sand density -> BGRA, one gather per frame
+        base = np.array([26, 29, 36], dtype=np.float32)
+        v = 1 - np.exp(-np.arange(64, dtype=np.float32) / 2 * 0.9)
+        col = base + (self.sand - base) * v[:, None]
+        self.lut = np.empty((64, 4), dtype=np.uint8)
+        self.lut[:, 0], self.lut[:, 1], self.lut[:, 2] = col[:, 2], col[:, 1], col[:, 0]
+        self.lut[:, 3] = 255
         self.status = ""
         self.btn = {}
         self.bar_rect = QRectF()
@@ -737,31 +657,13 @@ class Widget(QWidget):
     def on_fail(self, msg):
         self.status = msg
 
-    # ----- lighting
-    def lamp(self):
-        """(r, g, b in 0..255, brightness 0..1): the pitch colour, or plain warm light."""
-        if not self.lighting:
-            return (226, 196, 140), min(1.0, self.plate.level)
-        return tuple(int(c * 255) for c in self.plate.light), self.plate.glow
-
-    def sand_image(self, d):
-        """Sand density -> BGRA through a fixed colour table (the plate itself is never lit)."""
-        if not hasattr(self, "lut"):
-            base = np.array([26, 29, 36], dtype=np.float32)
-            sand = np.array([226, 196, 140], dtype=np.float32)
-            v = 1 - np.exp(-np.arange(64, dtype=np.float32) / 2 * 0.9)
-            col = base + (sand - base) * v[:, None]
-            self.lut = np.empty((64, 4), dtype=np.uint8)
-            self.lut[:, 0], self.lut[:, 1], self.lut[:, 2] = col[:, 2], col[:, 1], col[:, 0]
-            self.lut[:, 3] = 255
-        return self.lut[np.minimum((d * 2).astype(np.int32), 63)]
-
     # ----- frame
     def tick(self):
         self.plate.analyse(self.audio.buf)
         self.plate.step()
         d = self.plate.render()
-        self.frame = self.sand_image(d)
+        rgb = self.lut[np.minimum((d * 2).astype(np.int32), 63)]
+        self.frame = rgb
         self.img = QImage(self.frame.data, GRID, GRID, GRID * 4,
                           QImage.Format.Format_ARGB32)
         # pick up newly fetched cover art
@@ -786,11 +688,6 @@ class Widget(QWidget):
         u = W / 360.0
         margin = 8
         outer = QRectF(margin, margin, W - 2 * margin, W - 2 * margin)
-        (lr, lg, lb), glow_k = self.lamp()
-        for i in range(1, 7):                   # light spilling past the frame
-            p.setPen(QPen(QColor(lr, lg, lb, int(34 * glow_k / i)), 1.5))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRoundedRect(outer.adjusted(-i, -i, i, i), 18 + i, 18 + i)
         grad = QLinearGradient(outer.topLeft(), outer.bottomRight())
         grad.setColorAt(0, QColor(92, 98, 110))
         grad.setColorAt(1, QColor(40, 44, 52))
@@ -806,7 +703,9 @@ class Widget(QWidget):
         pl = self.plate
         if pl.falling and pl.fall_t < 16:      # visible jolt of the whole plate
             p.translate(np.random.uniform(-2, 2) * u, np.random.uniform(-2, 2) * u)
-        p.setPen(QPen(QColor(255, 210, 140, 76), 1.5))   # constant: nothing on the plate pulses
+        glow = QColor(255, 210, 140,
+                      min(255, int(30 + 120 * pl.level + 110 * pl.hit_flash)))
+        p.setPen(QPen(glow, 1.5 + 2.0 * pl.hit_flash))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(inner, 8, 8)
 
@@ -817,19 +716,13 @@ class Widget(QWidget):
             if self.status:
                 txt = self.status
             elif pl.level > 0.02 and pl.top_mode:
-                hz = pl.pitch or pl.freq
-                txt = (f"{note_name(hz)} · {hz:.0f} Hz · {pl.db:.0f} dB "
+                txt = (f"{pl.db:4.0f} dB · {pl.freq:5.0f} Hz "
                        f"· mode {pl.top_mode[0]},{pl.top_mode[1]}")
             elif pl.on["RFT"] and pl.rft_state == "building":
                 txt = "building RFT (first run only)…"
             else:
                 txt = "listening…"
-            p.save()
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(226, 196, 140))
-            p.drawEllipse(QPointF(inner.left() + 14 * u, inner.top() + 12 * u), 4 * u, 4 * u)
-            p.restore()
-            p.drawText(QRectF(inner.left() + 24 * u, inner.top() + 4, 260 * u, 20),
+            p.drawText(QRectF(inner.left() + 8, inner.top() + 4, 260 * u, 20),
                        Qt.AlignmentFlag.AlignLeft, txt)
 
         # dB meter: how hard the system is driving the plate
@@ -1039,7 +932,6 @@ class Widget(QWidget):
         for text, attr, cb in (
                 ("Show player panel", "show_player", self.toggle_player),
                 ("Show frequency label", "show_label", None),
-                ("Backdrop glow", "lighting", None),
                 ("Always on top", "always_on_top", self.set_on_top)):
             act = menu.addAction(text)
             act.setCheckable(True)
