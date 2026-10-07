@@ -36,13 +36,16 @@
   }
   function projection(input,rate,frequencies,q=null) {
     const re=new Float64Array(frequencies.length),im=new Float64Array(frequencies.length),amplitude=new Float64Array(frequencies.length);
+    const windows=new Map();
     frequencies.forEach((f,k)=>{
       const length=q?Math.min(input.length,Math.max(8,Math.round(q*rate/f))):input.length;
       const start=input.length-length, angle=2*Math.PI*f/rate, cr=Math.cos(angle),ci=Math.sin(angle);
-      let wr=1,wi=0,weight=0;
+      let window=windows.get(length);
+      if(!window){const values=Float64Array.from({length},(_,j)=>.5-.5*Math.cos(2*Math.PI*j/(length-1)));window={values,weight:values.reduce((a,b)=>a+b,0)};windows.set(length,window);}
+      let wr=1,wi=0;const weight=window.weight;
       for(let j=0;j<length;j++) {
-        const w=.5-.5*Math.cos(2*Math.PI*j/(length-1));
-        re[k]+=input[start+j]*w*wr;im[k]-=input[start+j]*w*wi;weight+=w;
+        const w=window.values[j];
+        re[k]+=input[start+j]*w*wr;im[k]-=input[start+j]*w*wi;
         const next=wr*cr-wi*ci;wi=wr*ci+wi*cr;wr=next;
       }
       re[k]*=2/weight;im[k]*=2/weight;amplitude[k]=Math.hypot(re[k],im[k]);

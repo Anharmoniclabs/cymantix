@@ -1,8 +1,9 @@
-import './modal-core.js?v=lab-20261007-2';
+import './modal-core.js?v=lab-20261007-3';
 class PlateProcessor extends AudioWorkletProcessor {
   constructor() {
     super(); this.bank=null;this.revision=0; this.pcm=new Float32Array(4096); this.cursor=0; this.endSample=0; this.reportCount=0;
     this.port.onmessage=({data})=>{
+      if(data.type==='field-port'){this.fieldPort=data.port;return;}
       if(data.type==='configure') {
         this.bank=new VirtualPlate.ModalBank(data.frequencies,data.gains,sampleRate,data.weights,VirtualPlate.material.dampingRatio,false);
         this.revision=data.revision;this.pcm.fill(0);this.cursor=0;this.endSample=0;this.reportCount=0;
@@ -21,6 +22,8 @@ class PlateProcessor extends AudioWorkletProcessor {
     }
     if(this.bank.samples>=sampleRate*.04) {
       const report={revision:this.revision,...this.bank.report(true),endSample:this.endSample};
+      this.fieldPort?.postMessage({revision:this.revision,stats:report.stats,energy:report.energy,endSample:this.endSample});
+      delete report.stats;
       // Analysis snapshots are bounded to ~8 Hz. Every sample still drives the plate.
       if(++this.reportCount%3===0) {
         report.pcm=new Float32Array(this.pcm.length);

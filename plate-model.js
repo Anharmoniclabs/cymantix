@@ -2,12 +2,12 @@
 class PhysicalPlateModel {
   constructor(context, input, receive, fail) {
     this.context=context;this.input=input;this.receive=receive;this.fail=fail;this.revision=0;
-    this.analysis=null;this.analysisBusy=false;this.analysisError=null;this.fieldBusy=false;this.field=null;this.fieldLast=-Infinity;
-    this.fieldWorker=new Worker('field-worker.js?v=lab-20261007-2');
-    this.fieldWorker.onmessage=({data})=>{this.fieldBusy=false;if(data.revision!==this.revision)return;if(data.error){this.fail(data.error);return;}this.field=data;};
+    this.analysis=null;this.analysisBusy=false;this.analysisError=null;this.field=null;
+    this.fieldWorker=new Worker('field-worker.js?v=lab-20261007-3');
+    this.fieldWorker.onmessage=({data})=>{if(data.revision!==this.revision)return;if(data.error){this.fail(data.error);return;}this.field=data;};
     this.fieldWorker.onerror=()=>this.fail('Plate field worker stopped. Reload to restart.');
     try {
-      this.analysisWorker=new Worker('signal-worker.js?v=lab-20261007-2');
+      this.analysisWorker=new Worker('signal-worker.js?v=lab-20261007-3');
       this.analysisWorker.onmessage=({data})=>{
         this.analysisBusy=false;
         if(data.revision!==this.revision)return;
@@ -19,15 +19,17 @@ class PhysicalPlateModel {
   }
   async start() {
     try {
-      await this.context.audioWorklet.addModule('plate-worklet.js?v=lab-20261007-2');
+      await this.context.audioWorklet.addModule('plate-worklet.js?v=lab-20261007-3');
       this.node=new AudioWorkletNode(this.context,'virtual-plate');
+      const channel=new MessageChannel();
+      this.node.port.postMessage({type:'field-port',port:channel.port1},[channel.port1]);
+      this.fieldWorker.postMessage({type:'connect',port:channel.port2},[channel.port2]);
       this.node.port.onmessage=({data})=>{
         if(data.revision!==this.revision)return;
         const energy=new Float64Array(this.set.f.length), displacement=new Float64Array(this.set.f.length);
         this.indices.forEach((original,i)=>{energy[original]=data.energy[i];displacement[original]=data.displacement[i];});
         const {pcm,...motion}=data;
         this.endSample=data.endSample;
-        if(!this.fieldBusy && performance.now()-this.fieldLast>=80){this.fieldLast=performance.now();this.fieldBusy=true;this.fieldWorker.postMessage({revision:this.revision,stats:data.stats,energy:data.energy,endSample:data.endSample});}
         this.receive({...motion,energy,displacement,selected:data.selected.map(i=>this.indices[i])});
         if(pcm && this.analysisWorker && !this.analysisBusy) {
           this.analysisBusy=true;
@@ -40,7 +42,7 @@ class PhysicalPlateModel {
     } catch(error) {this.fail('Continuous plate simulation is unavailable: '+error.message);}
   }
   configure(set) {
-    this.set=set;this.revision++;this.analysis=null;this.field=null;this.fieldBusy=false;this.fieldLast=-Infinity;
+    this.set=set;this.revision++;this.analysis=null;this.field=null;
     if(!this.node || !set.physical)return;
     const {material,sideM}=VirtualPlate, grid=Math.sqrt(set.W.length/set.f.length);
     const cellArea=sideM*sideM/(grid*grid);
@@ -64,7 +66,7 @@ class PhysicalPlateModel {
   }
 }
 async function loadFreeCircle(grid) {
-  const response=await fetch('data/free-circle.json?v=lab-20261007-2');if(!response.ok)throw new Error('Circular plate data unavailable');
+  const response=await fetch('data/free-circle.json?v=lab-20261007-3');if(!response.ok)throw new Error('Circular plate data unavailable');
   const {profiles,boundary,radialScale=1}=await response.json(),frequencies=[],la=[],lb=[],fields=[];
   if(boundary!=='free')throw new Error('Circular plate boundary mismatch');
   for(const profile of profiles) for(const sine of profile.m===0?[false]:[false,true]) {
