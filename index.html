@@ -22,16 +22,9 @@
   h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: .04em; }
   .sub { color: var(--dim); margin: 0 0 16px; font-size: 13px; text-align: center; }
   .wrap { width: min(100%, 640px); }
-  /* Backdrop glow only: faint, and it changes over ~a second (never flashes). */
-  :root { --glow: 226,196,140; --ga: 0; }
-  body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
-                 background: radial-gradient(ellipse at 50% 38%, rgba(var(--glow), calc(var(--ga) * .20)) 0%,
-                             rgba(var(--glow), calc(var(--ga) * .07)) 40%, transparent 72%); }
   .plate { background: linear-gradient(135deg, #5c626e, #282c34); border-radius: 22px;
-           padding: 12px;
-           box-shadow: 0 0 calc(20px + 50px * var(--ga)) calc(1px + 6px * var(--ga)) rgba(var(--glow), calc(.04 + .22 * var(--ga))),
-                       0 8px 30px #0006; }
-  canvas { touch-action: none; cursor: grab; display: block; width: 100%; aspect-ratio: 1; border-radius: 10px; background: #1a1d24; }
+           padding: 12px; box-shadow: 0 8px 30px #0006; }
+  canvas { display: block; width: 100%; aspect-ratio: 1; border-radius: 10px; background: #1a1d24; }
   .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
   button { background: var(--panel); color: var(--text); border: 1px solid var(--line);
            border-radius: 999px; padding: 8px 14px; font: inherit; cursor: pointer; }
@@ -51,44 +44,38 @@
 <p class="sub">A Chladni sand plate driven by whatever you play.</p>
 
 <div class="wrap">
-  <div class="plate"><canvas id="cv" width="1024" height="1024"></canvas></div>
+  <div class="plate"><canvas id="cv" width="640" height="640"></canvas></div>
   <div class="row">
     <button class="go" id="bDemo">▶ Demo</button>
-    <button id="bTab">Tab / system audio</button>
+    <button id="bTab">🖥 Tab / system audio</button>
   </div>
   <div class="row">
     <button id="bShake">⟲ Shake off</button>
-    <button id="bShape">◯ Circular plate</button>
   </div>
-  <div class="status" id="st">Pick a source to start, or drag across the plate to bow it. Nothing leaves your browser.</div>
+  <div class="status" id="st">Pick a source to start. Nothing leaves your browser.</div>
 
   <details>
     <summary>What am I looking at?</summary>
-    <p>Incoming audio drives a fixed point on a modeled 1 mm steel plate. Each retained
-       mode follows a damped equation of motion at the audio sample rate. HD grains
-       migrate toward regions with lower time-averaged acceleration.</p>
-    <p>The square has free edges; the circular plate has a clamped edge. This is a
-       numerically defined virtual plate, not a measurement of a physical one.
-       The sand transport is approximate. <a href="MODEL.md">Model, limits &amp; verification</a>.</p>
+    <p>A virtual square plate has resonant modes
+       φ = cos(nπx)cos(mπy) − s·cos(mπx)cos(nπy) at f ≈ F₀(n²+m²). Each mode is
+       driven by the sound energy near its own resonance, and the sand slides toward the
+       nodal lines, as on a real Chladni plate. Loudness (dB) sets how hard the plate is driven.</p>
     <p><a href="https://github.com/Anharmoniclabs/cymantix">Source &amp; desktop app</a></p>
   </details>
 </div>
 
-<script src="modal-core.js"></script>
-<script src="plate-model.js"></script>
 <script>
 "use strict";
 // ============================================================ constants
 const FFT_N = 4096, SN = 1024;        // FFT windows (long / short)
 const RFT_LONG = 1597, RFT_SHORT = 610;
-const GRID = 1024, GRAINS = 26000, FG = 160, F0 = 17.0, MAXK = 15;
+const GRID = 320, GRAINS = 26000, FG = 160, F0 = 17.0, MAXK = 15;
 const PHI = (1 + Math.sqrt(5)) / 2;
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const randn = () => (Math.random() + Math.random() + Math.random() - 1.5) * 2;  // ~N(0,1)
 
 // ============================================================ audio graph
 let ctx = null, analyser = null, outGain = null, srcNode = null, stopSrc = null;
-let physicalModel = null;
 const buf = new Float32Array(FFT_N);
 let RATE = 44100;
 
@@ -102,19 +89,12 @@ function ensureCtx() {
   analyser.connect(outGain);
   outGain.connect(ctx.destination);
   plate.setRate(RATE);
-  physicalModel = new PhysicalPlateModel(ctx, analyser, report => { plate.pendingReport = report; }, message => {
-    plate.pendingReport = null; plate.E.fill(0); plate.EX.fill(0); plate.EY.fill(0); plate.level = 0;
-    plate.solverFailed = true; setStatus(message);
-  });
-  physicalModel.configure(plate.set);
 }
 function useSource(node, audible, stop) {
   if (stopSrc) stopSrc();
   stopSrc = stop || null;
   if (srcNode) try { srcNode.disconnect(); } catch (e) {}
   srcNode = node;
-  physicalModel?.configure(plate.set);
-  plate.pendingReport = null;
   node.connect(analyser);
   outGain.gain.value = audible ? 1 : 0;      // captured tab must not echo back
 }
@@ -152,7 +132,7 @@ async function startTab() {
       s.getTracks().forEach(t => t.stop());
       setStatus("No audio shared. Pick a tab and tick “Share tab audio”."); return;
     }
-    // Keep the share session alive; all capture tracks are released on source replacement.
+    s.getVideoTracks().forEach(t => t.stop());
     mark("bTab");
     useSource(ctx.createMediaStreamSource(s), false, () => s.getTracks().forEach(t => t.stop()));
     setStatus("Listening to the shared tab. Play your music there.");
@@ -198,7 +178,7 @@ class Bank {
   }
   db(s) {                                       // dB in each plate mode's band, plus spectral peak
     if (this.every > 1 && this.last && this.n++ % this.every) return this.last;   // reuse the last result
-    const spec = this.spec = this.long(s), M = this.lo.length;
+    const spec = this.long(s), M = this.lo.length;
     if (!this.cs || this.cs.length !== spec.length + 1) { this.cs = new Float64Array(spec.length + 1); this.mdb = new Float32Array(M); }
     const cs = this.cs; let pk = 0;
     for (let i = 0; i < spec.length; i++) { cs[i + 1] = cs[i] + spec[i] * spec[i]; if (this.sel[i] && spec[i] > pk) pk = spec[i]; }
@@ -314,361 +294,141 @@ function rftBank(mf, UHl, UHs) {
   return new Bank(fl, flong, fs, fshort, lo, hi, slo, shi, SN / (2 * RFT_SHORT));
 }
 
-// ============================================================ colour of pitch
-// Transpose a sound frequency up by whole octaves until it lands in the visible band
-// (405-810 THz is exactly one octave), then turn that light frequency into RGB. Every
-// pitch class gets the colour it would have if the note were light: A440 is orange-red,
-// C4 is green, and an octave up or down never changes the hue.
-function wavelengthRGB(w) {
-  let r = 0, g = 0, b = 0;
-  if (w < 440) { r = (440 - w) / 60; b = 1; }
-  else if (w < 490) { g = (w - 440) / 50; b = 1; }
-  else if (w < 510) { g = 1; b = (510 - w) / 20; }
-  else if (w < 580) { r = (w - 510) / 70; g = 1; }
-  else if (w < 645) { r = 1; g = (645 - w) / 65; }
-  else r = 1;
-  const k = w < 420 ? 0.35 + 0.65 * (w - 380) / 40 : w > 700 ? 0.35 + 0.65 * (750 - w) / 50 : 1;
-  return [r, g, b].map(c => Math.pow(c * k, 0.8));
-}
-function pitchColor(f) {
-  let fl = f * 2 ** 40;                         // near the visible band already
-  while (fl < 405e12) fl *= 2;
-  while (fl >= 810e12) fl /= 2;
-  return wavelengthRGB(clamp(299792458 / fl * 1e9, 380, 750));
-}
-const NOTES = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
-// True pitch near a plate mode: parabolic peak interpolation on the FFT magnitudes, so a
-// 261.6 Hz tone is coloured as C4 even though the plate's nearest resonance is a semitone away.
-function interp(spec, k) {                       // parabolic peak interpolation on log magnitudes
-  const a = Math.log(spec[k - 1] + 1e-12), b = Math.log(spec[k] + 1e-12), c = Math.log(spec[k + 1] + 1e-12);
-  return (k + clamp(0.5 * (a - c) / (a - 2 * b + c), -0.5, 0.5)) * RATE / FFT_N;
-}
-function peakNear(spec, f0, span, floor) {       // strongest genuine local max within +-span of f0, or 0
-  const df = RATE / FFT_N, lo = Math.max(2, Math.floor(f0 * (1 - span) / df)), hi = Math.min(spec.length - 3, Math.ceil(f0 * (1 + span) / df));
-  let k = -1;
-  for (let i = lo; i <= hi; i++) if (spec[i] > spec[i - 1] && spec[i] >= spec[i + 1] && (k < 0 || spec[i] > spec[k])) k = i;
-  return k < 0 || spec[k] < floor || spec[k] < 1e-6 ? 0 : interp(spec, k);
-}
-function noteName(f) {
-  const x = 12 * Math.log2(f / 440) + 69, n = Math.round(x), c = Math.round((x - n) * 100);
-  return NOTES[((n % 12) + 12) % 12] + (Math.floor(n / 12) - 1) + (Math.abs(c) >= 5 ? ` ${c > 0 ? "+" : ""}${c}¢` : "");
-}
-
-// ============================================================ plate modes
-// A mode set is {f, la, lb, W}: resonant frequencies (Hz), labels, and mode shapes sampled on an
-// FG x FG grid (row-major [y][x], max |W| = 1). The real sets are solved offline (tools/export_modes.py):
-// the free-edge square plate by Ritz's method, and a circular plate from Bessel modes.
-function analyticModes() {                       // classic cos/cos figures: used until the solved modes arrive
-  const list = [];
+// ============================================================ plate physics
+function buildModes() {
+  const modes = [];
   for (let n = 1; n < MAXK; n++) for (let m = n + 1; m <= MAXK; m++) for (const s of [1, -1]) {
     const f = F0 * (n * n + m * m) * (1 + 0.035 * s);
-    if (f >= 45 && f <= 7500) list.push({ n, m, s, f });
+    if (f >= 45 && f <= 7500) modes.push({ n, m, s, f });
   }
-  list.sort((a, b) => a.f - b.f);
-  const C = Array.from({ length: MAXK + 1 }, (_, k) => Float32Array.from({ length: FG }, (_, i) => Math.cos(k * Math.PI * (i + 0.5) / FG)));
-  const W = new Float32Array(list.length * FG * FG);
-  list.forEach((md, i) => {
-    const o = i * FG * FG; let mx = 0;
-    for (let y = 0; y < FG; y++) for (let x = 0; x < FG; x++) {
-      const v = C[md.m][y] * C[md.n][x] - md.s * C[md.n][y] * C[md.m][x];
-      W[o + y * FG + x] = v; if (Math.abs(v) > mx) mx = Math.abs(v);
-    }
-    for (let k = 0; k < FG * FG; k++) W[o + k] /= mx;
-  });
-  return { f: Float32Array.from(list, m => m.f), la: Uint8Array.from(list, m => m.n), lb: Uint8Array.from(list, m => m.m), W };
+  return modes;
 }
-async function loadModeSet(shape) {
-  if (shape === "circle") return loadClampedCircle(FG);
-  const r = await fetch(`data/modes_${shape}.bin`);
-  if (!r.ok) throw new Error(`modes_${shape}.bin: HTTP ${r.status}`);
-  const ab = await r.arrayBuffer(), dv = new DataView(ab), n = dv.getUint32(0, true), fg = dv.getUint32(4, true);
-  if (fg !== FG) throw new Error("mode grid size mismatch");
-  const q = new Int16Array(ab, 8 + 6 * n, n * FG * FG), W = new Float32Array(q.length);
-  for (let i = 0; i < q.length; i++) W[i] = q[i] / 32767;
-  return { f: new Float32Array(ab, 8, n), la: new Uint8Array(ab, 8 + 4 * n, n), lb: new Uint8Array(ab, 8 + 5 * n, n), W, physical: true };
-}
-
-// ============================================================ plate physics
 const topK = (arr, k) => Array.from(arr.keys()).sort((a, b) => arr[b] - arr[a]).slice(0, k);
-const DRIVE_PT = [0.37, 0.31];                   // where the plate is excited: off-centre, so few modes are silenced
-
-// Peaks of the spectrum excite the modes near them, weighted by closeness in cents, the peak's
-// strength, and how much the mode moves at the driving point (cf. Resonance Lab's mode weighting).
-class PeakEar {
-  constructor(plate) { this.plate = plate; this.ref = -60; }
-  tvec() {
-    const pl = this.plate, M = pl.mf.length, t = new Float32Array(M), bank = pl.banks.FFT, spec = bank && bank.spec;
-    if (!spec) return t;
-    const df = RATE / FFT_N, lo = Math.max(2, Math.ceil(35 / df)), hi = Math.min(spec.length - 3, Math.floor(7500 / df));
-    let mx = 0; for (let j = lo; j <= hi; j++) if (spec[j] > mx) mx = spec[j];
-    this.ref = Math.max(20 * Math.log10(mx + 1e-9), this.ref - 0.1);
-    const peaks = [];
-    for (let j = lo + 1; j < hi; j++) if (spec[j] > spec[j - 1] && spec[j] >= spec[j + 1]) {
-      const v = clamp((20 * Math.log10(spec[j] + 1e-9) - (this.ref - 36)) / 36, 0, 1);
-      if (v > 0.05) peaks.push([interp(spec, j), v]);
-    }
-    peaks.sort((a, b) => b[1] - a[1]); peaks.length = Math.min(peaks.length, 12);
-    this.peaks = peaks;
-    for (let i = 0; i < M; i++) {
-      let w = 0;
-      for (const [pf, v] of peaks) { const c = 1200 * Math.log2(pl.mf[i] / pf); w += v * Math.exp(-0.5 * (c / 100) ** 2); }
-      t[i] = Math.min(1, w) ** 2 * (0.35 + 0.65 * pl.drive[i]);
-    }
-    return t;
-  }
-}
-
-// ============================================================ GPU sand
-// The grains live in a float texture and are advanced by a fragment shader (the same rules as the CPU
-// loop), so there can be ten times as many. Positions are drawn as additive points into a density
-// texture, which a last pass turns into sand colours. Falls back to the CPU path if WebGL2 can't do it.
-const GPU_TEX = 512, GPU_N = GPU_TEX * GPU_TEX;
-const GLSL_HASH = `uint pcg(uint v){ uint s=v*747796405u+2891336453u; uint w=((s>>((s>>28u)+4u))^s)*277803737u; return (w>>22u)^w; }
-float rnd(uint a){ return float(pcg(a))/4294967296.0; }`;
-function initGpu() {
-  if (/[?&]cpu\b/.test(location.search)) return null;
-  try {
-    const canvas = document.createElement("canvas"); canvas.width = canvas.height = GRID;
-    const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, preserveDrawingBuffer: true });
-    if (!gl || !gl.getExtension("EXT_color_buffer_float")) return null;
-    canvas.addEventListener('webglcontextlost', event => {
-      event.preventDefault(); plate.gpu = null; plate.reset();
-      setStatus('Graphics context lost. Continuing with CPU sand.');
-    });
-    const prog = (vs, fs) => {
-      const mk = (t, src) => { const sh = gl.createShader(t); gl.shaderSource(sh, src); gl.compileShader(sh);
-        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh; };
-      const p = gl.createProgram(); gl.attachShader(p, mk(gl.VERTEX_SHADER, "#version 300 es\n" + vs));
-      gl.attachShader(p, mk(gl.FRAGMENT_SHADER, "#version 300 es\n" + fs)); gl.linkProgram(p);
-      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
-      const u = {}; for (let i = 0, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i < n; i++) { const nm = gl.getActiveUniform(p, i).name; u[nm] = gl.getUniformLocation(p, nm); }
-      return { p, u };
-    };
-    const tri = "void main(){ vec2 q=vec2(float((gl_VertexID<<1)&2), float(gl_VertexID&2)); gl_Position=vec4(q*2.0-1.0,0.0,1.0); }";
-    const update = prog(tri, `precision highp float; precision highp int;
-uniform sampler2D uState, uField; uniform float uDrift,uKick,uMaxStep,uActive,uFrame,uFallT; uniform int uCircle,uMode;
-out vec4 o;
-${GLSL_HASH}
-void main(){
-  ivec2 c=ivec2(gl_FragCoord.xy); int gid=c.y*${GPU_TEX}+c.x;
-  vec4 s=texelFetch(uState,c,0);
-  uint h=uint(gid)*9781u+uint(uFrame)*6271u+1u;
-  float r1=rnd(h),r2=rnd(h+101u),r3=rnd(h+202u),r4=rnd(h+303u),r5=rnd(h+404u),r6=rnd(h+505u);
-  float n1=(r1+r2+r3-1.5)*2.0, n2=(r4+r5+r6-1.5)*2.0;
-  if(uMode==3){                                   // fresh sand
-    vec2 p=vec2(r1,r2);
-    if(uCircle==1){ float rr=0.49*sqrt(r1), th=6.2831853*r2; p=0.5+rr*vec2(cos(th),sin(th)); }
-    o=vec4(p,0.0,r3); return;
-  }
-  if(float(gid)>=uActive){ o=s; return; }
-  vec2 p=s.xy;
-  if(uMode==1){ o=vec4(clamp(p+vec2(n1,n2)*0.006,0.0,1.0),s.z,s.w); return; }       // the plate is jolted
-  if(uMode==2){                                                                       // grains fall off
-    float delay=floor(s.w*45.0), v=s.z;
-    if(uFallT-16.0>delay){ v+=0.0016; p.y+=v; p.x+=n1*0.0015; }
-    o=vec4(p,v,s.w); return;
-  }
-  vec2 cell=clamp(p*${FG}.0-0.5,vec2(0.0),vec2(${FG-1}.0));
-  ivec2 fi=ivec2(floor(cell)), fj=min(fi+1,ivec2(${FG-1})); vec2 blend=fract(cell);
-  vec3 f=mix(mix(texelFetch(uField,fi,0).xyz,texelFetch(uField,ivec2(fj.x,fi.y),0).xyz,blend.x),
-             mix(texelFetch(uField,ivec2(fi.x,fj.y),0).xyz,texelFetch(uField,fj,0).xyz,blend.x),blend.y);                                                  // E, dE/dx, dE/dy
-  float stableStep=min(uDrift,0.45*f.x/(dot(f.yz,f.yz)+1e-8));
-  vec2 g=stableStep*f.yz; float m=length(g); if(m>uMaxStep) g*=uMaxStep/m;
-  float kk=uKick*sqrt(max(f.x,0.0));
-  p=abs(p-g+vec2(n1,n2)*kk);
-  p=vec2(p.x>1.0?2.0-p.x:p.x, p.y>1.0?2.0-p.y:p.y); p=clamp(p,0.0,1.0);
-  if(uCircle==1){ vec2 d=p-0.5; float q=dot(d,d); if(q>0.2401) p=0.5+d*(0.49/sqrt(q)); }
-  o=vec4(p,s.z,s.w);
-}`);
-    const dots = prog(`precision highp float; uniform sampler2D uState; uniform float uActive; out float grainShade;
-void main(){ int gid=gl_VertexID; vec4 s=texelFetch(uState,ivec2(gid&${GPU_TEX - 1},gid>>9),0);
-  gl_PointSize=1.2+s.w*0.9; grainShade=0.7+0.3*s.w;
-  if(float(gid)>=uActive||s.y>1.0){ gl_Position=vec4(2.0,2.0,2.0,1.0); return; }
-  gl_Position=vec4(s.x*2.0-1.0,s.y*2.0-1.0,0.0,1.0); }`,
-      `precision highp float; uniform float uW; in float grainShade; out vec4 o; void main(){
-        vec2 q=gl_PointCoord*2.0-1.0; float coverage=1.0-smoothstep(0.45,1.0,length(q));
-        o=vec4(uW*coverage*grainShade,0.0,0.0,1.0); }`);
-    const shade = prog(tri, `precision highp float; uniform sampler2D uDens; out vec4 o;
-float d(ivec2 c){ return (c.x<0||c.y<0||c.x>=${GRID}||c.y>=${GRID})?0.0:texelFetch(uDens,c,0).r; }
-void main(){
-  ivec2 fc=ivec2(gl_FragCoord.xy), c=ivec2(fc.x,${GRID - 1}-fc.y);            // image row 0 is the top
-  float v=d(c), t=1.0-exp(-v*1.35);
-  o=vec4(mix(vec3(16.0,21.0,28.0),vec3(243.0,215.0,162.0),t)/255.0,1.0);
-}`);
-    const tex = (w, h, ifmt, fmt, type, filter = gl.NEAREST) => {
-      const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
-      gl.texImage2D(gl.TEXTURE_2D, 0, ifmt, w, h, 0, fmt, type, null);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t;
-    };
-    const fbo = t => { const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
-      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("framebuffer incomplete"); return f; };
-    const st = [0, 1].map(() => tex(GPU_TEX, GPU_TEX, gl.RGBA32F, gl.RGBA, gl.FLOAT)), sf = st.map(fbo);
-    const field = tex(FG, FG, gl.RGBA32F, gl.RGBA, gl.FLOAT), fieldBuf = new Float32Array(FG * FG * 4);
-    const dens = tex(GRID, GRID, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT), df = fbo(dens);
-    const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
-    let cur = 0, frame = 0;
-    const bind = (unit, t) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t); };
-    return {
-      canvas, N: GPU_N,
-      // one simulation step. mode: 0 normal, 1 jolt, 2 fall, 3 reset
-      step(P, E, EX, EY) {
-        if (P.mode === 0) {
-          for (let i = 0, n = FG * FG; i < n; i++) { fieldBuf[4 * i] = E[i]; fieldBuf[4 * i + 1] = EX[i]; fieldBuf[4 * i + 2] = EY[i]; }
-          bind(1, field); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, FG, FG, gl.RGBA, gl.FLOAT, fieldBuf);
-        }
-        gl.bindFramebuffer(gl.FRAMEBUFFER, sf[1 - cur]); gl.viewport(0, 0, GPU_TEX, GPU_TEX); gl.disable(gl.BLEND);
-        gl.useProgram(update.p); bind(0, st[cur]); bind(1, field);
-        const u = update.u;
-        gl.uniform1i(u.uState, 0); gl.uniform1i(u.uField, 1);
-        gl.uniform1f(u.uDrift, P.drift); gl.uniform1f(u.uKick, P.kick); gl.uniform1f(u.uMaxStep, 0.02);
-        gl.uniform1f(u.uActive, P.active); gl.uniform1f(u.uFrame, frame++); gl.uniform1f(u.uFallT, P.fallT);
-        gl.uniform1i(u.uCircle, P.circle ? 1 : 0); gl.uniform1i(u.uMode, P.mode);
-        gl.drawArrays(gl.TRIANGLES, 0, 3); cur = 1 - cur;
-        this.active = P.active; this.mode = P.mode;
-      },
-      render() {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, df); gl.viewport(0, 0, GRID, GRID);
-        gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
-        gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-        gl.useProgram(dots.p); bind(0, st[cur]);
-        gl.uniform1i(dots.u.uState, 0); gl.uniform1f(dots.u.uActive, this.active || 0); gl.uniform1f(dots.u.uW, 1.0);
-        gl.drawArrays(gl.POINTS, 0, GPU_N);
-        gl.disable(gl.BLEND);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, GRID, GRID);
-        gl.useProgram(shade.p); bind(0, dens); gl.uniform1i(shade.u.uDens, 0);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-      },
-    };
-  } catch (e) { console.warn("GPU sand unavailable:", e); return null; }
-}
 
 class Plate {
   constructor() {
-    this.shape = "square"; this.banks = {}; this.rate = 0;
-    this.E = new Float32Array(FG * FG); this.EX = new Float32Array(FG * FG); this.EY = new Float32Array(FG * FG);
+    this.modes = buildModes();
+    const M = this.modes.length;
+    this.mn = this.modes.map(k => k.n); this.mm = this.modes.map(k => k.m);
+    this.ms = this.modes.map(k => k.s); this.mf = this.modes.map(k => k.f);
+    this.mband = this.mf.map(f => f < 250 ? 0 : f < 2500 ? 1 : 2);
+    this.amp = new Float32Array(M);
+    const C = [], S = [];
+    for (let k = 0; k <= MAXK; k++) {
+      C.push(Float32Array.from({ length: FG }, (_, i) => Math.cos(k * Math.PI * (i + 0.5) / FG)));
+      S.push(Float32Array.from({ length: FG }, (_, i) => Math.sin(k * Math.PI * (i + 0.5) / FG)));
+    }
+    this.C = C; this.S = S;
+    this.U = new Float32Array(FG * FG); this.UX = new Float32Array(FG * FG); this.UY = new Float32Array(FG * FG);
     this.p = new Float32Array(GRAINS * 2);
     this.bflux = [1, 1, 1]; this.blast = [-99, -99, -99];
-    this.frame = 0; this.tick = 0; this.db = -90; this.dbRef = -40;
+    this.frame = 0; this.db = -90; this.dbRef = -40;
     this.level = 0; this.hit = 0; this.hitFlash = 0; this.freq = 0; this.top = null;
-    this.light = [0.89, 0.77, 0.55]; this.glow = 0; this.pitch = 0;       // backdrop colour (additive mix of ringing pitches) and brightness
     this.useRft = true; this.rftState = "building";
-    this.setModes(analyticModes(), "square");
+    this.banks = {};
+    this.reset();
   }
-  setModes(set, shape) {
-    this.set = set; this.shape = shape;
-    const M = set.f.length, idx = Math.floor(DRIVE_PT[1] * FG) * FG + Math.floor(DRIVE_PT[0] * FG);
-    this.mf = Array.from(set.f);
-    this.mband = this.mf.map(f => f < 250 ? 0 : f < 2500 ? 1 : 2);
-    this.amp = new Float32Array(M); this.ts = new Float32Array(M); this.hold = new Int32Array(M);
-    this.drive = Float32Array.from({ length: M }, (_, i) => Math.abs(set.W[i * FG * FG + idx]));
-    this.top = null; this.freq = 0; this.pendingReport = null;
-    this.E.fill(0); this.EX.fill(0); this.EY.fill(0);
-    physicalModel?.configure(set);
-    this.reset();                                // fresh sand for a new plate
-    if (this.rate) this.rebuildBanks();
-  }
-  setRate(r) { this.rate = r; this.rebuildBanks(); }
-  rebuildBanks() {
+  setRate(r) {
     this.banks.FFT = fftBank(this.mf);
-    // FFT is a pitch readout only. Motion comes exclusively from the audio-rate solver.
+    this.banks.DCT = dctBank(this.mf);
+    this.banks.CQT = cqtEar(this.mf);
+    if (this.rftData) this.banks.RFT = rftBank(this.mf, ...this.rftData);
   }
   get analysis() { return this.useRft && this.banks.RFT ? "RFT" : "FFT"; }
   reset() {
+    for (let i = 0; i < this.p.length; i++) this.p[i] = Math.random();
     this.mass = 0; this.falling = false; this.tuned = false;
-    if (this.gpu) { this.gpuReset = true; return; }          // the grains are re-scattered on the GPU
-    const p = this.p, circle = this.shape === "circle";
-    for (let i = 0; i < GRAINS; i++) {
-      let x, y;
-      do { x = Math.random(); y = Math.random(); } while (circle && (x - .5) ** 2 + (y - .5) ** 2 > 0.2401);
-      p[2 * i] = x; p[2 * i + 1] = y;
-    }
   }
 
   analyse(samples) {
-    // Do not use display-frame samples as force: the worklet processes every audio sample.
-    const report = this.pendingReport;
-    if (!report || this.solverFailed) return;
-    this.pendingReport = null; this.lastReport = report;
-    this.db = 20 * Math.log10(report.rms + 1e-12);
-    this.banks.FFT?.db(samples);
-    let peak = 0;
-    for (let i=0;i<this.amp.length;i++) { this.amp[i] = Math.sqrt(report.energy[i]) / VirtualPlate.material.gravity; peak = Math.max(peak,this.amp[i]); }
-    // Display meter only; the field keeps absolute acceleration squared, with no AGC.
-    this.hit = 0;
-    if (!this.falling && (report.rms > 1e-8 || peak > 1e-6)) this.mass = Math.min(1, this.mass + report.seconds * .3);
-    this.buildField(report);
-    this.updateLight();
+    let ss = 0; for (let i = FFT_N - 2048; i < FFT_N; i++) ss += samples[i] * samples[i];
+    const rms = Math.sqrt(ss / 2048), db = 20 * Math.log10(rms + 1e-9);
+    this.db += (db - this.db) * (db > this.db ? 0.6 : 0.12);
+    const silent = rms < 3e-4;
+    if (silent) this.dbRef -= 0.2; else this.dbRef = Math.max(db, this.dbRef - 0.04, -60);
+    const drive = silent ? 0 : clamp((db - (this.dbRef - 40)) / 40, 0, 1);
+    this.level += (drive - this.level) * (drive > this.level ? 0.7 : 0.08);
+    this.hit *= 0.86; this.hitFlash *= 0.9;
+
+    const M = this.modes.length, tgt = new Float32Array(M), bank = this.banks[this.analysis];
+    if (!silent && bank) {
+      if (!this.falling) this.mass = Math.min(1, this.mass + 0.0004 * this.level + 0.0016 * this.hit);
+      // sustained resonance: every transform scores each mode against its own loudness
+      // reference; a mode rings if any of them hears it (so no band is left to one transform's blind spot)
+      const t = new Float32Array(M);
+      for (const name of ["FFT", "DCT", "RFT", "CQT"]) {
+        const ear = this.banks[name]; if (!ear) continue;
+        const [mdb, pk] = ear.db(samples);
+        ear.ref = Math.max(pk, ear.ref - 0.1);
+        for (let i = 0; i < M; i++) { const v = clamp((mdb[i] - (ear.ref - 36)) / 36, 0, 1); if (v * v > t[i]) t[i] = v * v; }
+      }
+      for (const i of topK(t, 10)) tgt[i] = t[i];
+
+      // transients: newest ~23 ms, flux per band (low / mid / high)
+      const sp = bank.short(samples), prev = bank.sprev;
+      this.frame++;
+      let strength = 0; const hitBands = [];
+      for (let b = 0; b < 3; b++) {
+        let flux = 0; const mk = bank.sbands[b];
+        for (let i = 0; i < sp.length; i++) if (mk[i]) { const d = sp[i] - prev[i]; if (d > 0) flux += d; }
+        flux *= bank.fluxnorm;
+        const ratio = flux / (this.bflux[b] + 1e-6);
+        if (flux > 0.6 && ratio > 1.5 && this.frame - this.blast[b] >= 2) {
+          this.blast[b] = this.frame; strength = Math.max(strength, Math.min((ratio - 1) / 2.5, 1)); hitBands.push(b);
+        }
+        this.bflux[b] += (flux - this.bflux[b]) * 0.12;
+      }
+      prev.set(sp);
+      if (hitBands.length) {
+        this.hit = Math.max(this.hit, strength); this.hitFlash = 1;
+        const sc = new Float64Array(sp.length + 1);
+        for (let i = 0; i < sp.length; i++) sc[i + 1] = sc[i] + sp[i] * sp[i];
+        const sdb = new Float32Array(M); let ref = -Infinity, any = false;
+        for (let i = 0; i < M; i++) {
+          sdb[i] = 20 * Math.log10(Math.sqrt((sc[bank.shi[i]] - sc[bank.slo[i]]) / (bank.shi[i] - bank.slo[i])) + 1e-9);
+          if (hitBands.includes(this.mband[i])) { any = true; ref = Math.max(ref, sdb[i]); }
+        }
+        if (!any) ref = Math.max(...sdb);
+        const ts = new Float32Array(M);
+        for (let i = 0; i < M; i++) if (hitBands.includes(this.mband[i])) { const v = clamp((sdb[i] - (ref - 24)) / 24, 0, 1); ts[i] = v * v; }
+        for (const i of topK(ts, 10)) this.amp[i] = Math.max(this.amp[i], ts[i] * (0.6 + 0.4 * strength));
+      }
+    }
+    for (let i = 0; i < M; i++) {
+      this.amp[i] += (tgt[i] - this.amp[i]) * (tgt[i] > this.amp[i] ? 0.6 : 0.07);
+      if (this.amp[i] < 0.003) this.amp[i] = 0;
+    }
+    this.buildField();
   }
 
-  truePitch(spec, i) {
-    // the pitch actually heard near mode i; if nothing real is near it (the plate has no resonance
-    // there), fall back to the strongest tone anywhere in the spectrum
-    if (!spec) return this.mf[i];
-    const df = RATE / FFT_N, lo = Math.max(2, Math.ceil(35 / df)), hi = Math.min(spec.length - 3, Math.floor(7500 / df));
-    let gk = lo; for (let j = lo; j <= hi; j++) if (spec[j] > spec[gk]) gk = j;
-    return peakNear(spec, this.mf[i], 0.12, 0.3 * spec[gk]) || interp(spec, gk);
-  }
-
-  updateLight() {
-    // the strongest ringing modes each contribute their pitch's colour, as lights add
-    const act = [], spec = this.banks.FFT && this.banks.FFT.spec;
-    for (let i = 0; i < this.amp.length; i++) if (this.amp[i] > 1e-8) act.push(i);
-    act.sort((a, b) => this.amp[b] - this.amp[a]);
-    let r = 0, g = 0, b = 0, tw = 0;
-    for (const i of act.slice(0, 3)) {
-      const w = this.amp[i] ** 2, fp = this.truePitch(spec, i), c = pitchColor(fp);
-      if (i === act[0]) this.pitch = fp;
-      r += w * c[0]; g += w * c[1]; b += w * c[2]; tw += w;
+  buildField() {
+    let act = [];
+    for (let i = 0; i < this.amp.length; i++) if (this.amp[i] > 0.02) act.push(i);
+    if (!act.length) { this.U.fill(0); this.UX.fill(0); this.UY.fill(0); return; }
+    if (act.length > 16) act = act.sort((a, b) => this.amp[b] - this.amp[a]).slice(0, 16);
+    let tot = 1e-6; for (const i of act) tot += this.amp[i];
+    this.U.fill(0); this.UX.fill(0); this.UY.fill(0);
+    const { C, S, U, UX, UY } = this;
+    for (const i of act) {
+      const n = this.mn[i], m = this.mm[i], sg = this.ms[i], a = this.amp[i] / tot, ap = a * Math.PI;
+      const Cn = C[n], Cm = C[m], Sn = S[n], Sm = S[m];
+      for (let y = 0, o = 0; y < FG; y++) {
+        const cmy = Cm[y], cny = Cn[y], smy = Sm[y], sny = Sn[y];
+        for (let x = 0; x < FG; x++, o++) {
+          U[o] += a * (cmy * Cn[x] - sg * cny * Cm[x]);
+          UX[o] += ap * (-n * cmy * Sn[x] + sg * m * cny * Sm[x]);
+          UY[o] += ap * (-m * smy * Cn[x] + sg * n * sny * Cm[x]);
+        }
+      }
     }
-    if (tw > 0) {                                // keep the last colour while quiet; just let it fade
-      const m = Math.max(r, g, b);
-      const tgt = [r / m, g / m, b / m];
-      for (let j = 0; j < 3; j++) this.light[j] += (tgt[j] - this.light[j]) * 0.015;   // ~1 s: hue never jumps
-    }
-    // brightness follows the average loudness slowly and tops out low: no beat-synced flicker
-    const gt = this.level > 0.02 ? 0.35 + 0.35 * this.level : 0;
-    this.glow += (gt - this.glow) * 0.012;
-  }
-
-  buildField(report) {
-    // Time-averaged acceleration covariance retains phase interference between the
-    // selected physical modes: E(x,y)=<a(x,y)^2>/g^2, not a normalized mode score.
-    const {E,EX,EY}=this, {selected,covariance}=report, size=FG*FG, n=selected.length;
-    const W=this.set.W, gravity2=VirtualPlate.material.gravity**2;
-    E.fill(0); EX.fill(0); EY.fill(0);
-    for(let i=0;i<n;i++) for(let j=0;j<=i;j++) {
-      const coefficient=covariance[i*n+j]*(i===j?1:2)/gravity2;
-      if(Math.abs(coefficient)<1e-20)continue;
-      const a=selected[i]*size,b=selected[j]*size;
-      for(let k=0;k<size;k++) E[k]+=coefficient*W[a+k]*W[b+k];
-    }
-    // Floating-point covariance accumulation can leave tiny negative roundoff.
-    let scale=0;
-    for(let k=0;k<size;k++) {E[k]=Math.max(0,E[k]);if(E[k]>scale)scale=E[k];}
-    // Absolute acceleration (g^2) sets how hard the plate shakes (level, mobility); the sand only
-    // needs the pattern's shape, so transport uses the field normalised to its own maximum.
-    // Sand is also light in physical units, so raw g^2 would leave it frozen at music levels.
-    const dB=10*Math.log10(scale+1e-30), target=scale>1e-14?Math.min(1,Math.max(0,(dB+70)/55)):0;
-    this.level+=(target-this.level)*(target>this.level?.6:.12);
-    if(scale>1e-14) for(let k=0;k<size;k++) E[k]/=scale; else E.fill(0);
-    for(let y=0;y<FG;y++)for(let x=0;x<FG;x++) {
-      const k=y*FG+x;
-      EX[k]=(E[y*FG+Math.min(FG-1,x+1)]-E[y*FG+Math.max(0,x-1)])*(x>0&&x<FG-1?FG/2:FG);
-      EY[k]=(E[Math.min(FG-1,y+1)*FG+x]-E[Math.max(0,y-1)*FG+x])*(y>0&&y<FG-1?FG/2:FG);
-    }
-    let best=0;for(let i=1;i<this.amp.length;i++)if(this.amp[i]>this.amp[best])best=i;
-    if(this.amp[best]>1e-8) {this.freq=this.mf[best];this.top=[this.set.la[best],this.set.lb[best]];this.tuned=true;}
-    else {this.freq=0;this.top=null;}
-    this.coverage=report.coverage;
+    let best = act[0]; for (const i of act) if (this.amp[i] > this.amp[best]) best = i;
+    this.freq = this.mf[best]; this.top = [this.mn[best], this.mm[best]]; this.tuned = true;
   }
 
   shakeOff() {
     if (this.falling || this.mass <= 0) return;
     const k = Math.floor(this.mass * GRAINS);
     this.falling = true; this.fallT = 0;
-    if (this.gpu) return;
     this.vel = new Float32Array(k);
     this.delay = Int32Array.from({ length: k }, () => Math.floor(Math.random() * 45));
   }
@@ -686,167 +446,94 @@ class Plate {
     if (all) this.reset();
   }
 
-  stepGpu() {
-    const circle = this.shape === "circle", N = this.gpu.N;
-    if (this.gpuReset) {                           // re-scatter the grains, but the plate starts empty: draw none yet
-      this.gpuReset = false; this.gpu.step({ mode: 3, active: N, circle, drift: 0, kick: 0, fallT: 0 }); this.gpu.active = 0; return;
-    }
-    if (this.falling) {
-      this.fallT++;
-      this.gpu.step({ mode: this.fallT < 16 ? 1 : 2, active: Math.floor(this.mass * N), circle, drift: 0, kick: 0, fallT: this.fallT }, this.E, this.EX, this.EY);
-      if (this.fallT > 105) this.reset();        // everything has dropped off the plate by now
-      return;
-    }
-    const k = Math.floor(this.mass * N);
-    if (k < 1 || !this.tuned) { this.gpu.active = 0; return; }
-    const a = .35 + .65 * this.level;
-    this.gpu.step({ mode: 0, active: k, circle, drift: 0.008 * a, kick: 0.0012 * a + 0.008 * this.hit, fallT: 0 }, this.E, this.EX, this.EY);
-  }
-
   step() {
-    if (this.gpu) { this.stepGpu(); return; }
     if (this.falling) { this.fallStep(); return; }
     const k = Math.floor(this.mass * GRAINS);
     if (k < 1 || !this.tuned) return;
-    const a = .35 + .65 * this.level;
-    const drift = 0.008 * a, kick = 0.0012 * a + 0.008 * this.hit, circle = this.shape === "circle";
-    const { p, E, EX, EY } = this, MAXSTEP = 0.02;
+    let a = 0.18 + 0.82 * this.level;
+    a = this.level > 0.02 ? Math.min(a + 1.4 * this.hit, 2.2) : 0;
+    const drift = 0.0011 * a, kick = 0.0048 * a + 0.016 * this.hit;
+    const { p, U, UX, UY } = this;
     for (let i = 0; i < k; i++) {
       let x = p[2 * i], y = p[2 * i + 1];
       const idx = Math.min((y * FG) | 0, FG - 1) * FG + Math.min((x * FG) | 0, FG - 1);
-      const stableStep = Math.min(drift, 0.45 * E[idx] / (EX[idx] ** 2 + EY[idx] ** 2 + 1e-8));
-      let gx = stableStep * EX[idx], gy = stableStep * EY[idx];
-      const mag = Math.hypot(gx, gy);                 // clamp the slide by magnitude, not per axis (no diagonal bias)
-      if (mag > MAXSTEP) { gx *= MAXSTEP / mag; gy *= MAXSTEP / mag; }
-      const kk = kick * Math.sqrt(E[idx]);
-      x = Math.abs(x - gx + randn() * kk); y = Math.abs(y - gy + randn() * kk);
+      const u = U[idx];
+      x -= drift * u * UX[idx]; y -= drift * u * UY[idx];
+      const kk = kick * Math.abs(u);
+      x = Math.abs(x + randn() * kk); y = Math.abs(y + randn() * kk);
       if (x > 1) x = 2 - x; if (y > 1) y = 2 - y;
-      x = clamp(x, 0, 1); y = clamp(y, 0, 1);
-      if (circle) { const dx = x - .5, dy = y - .5, r2 = dx * dx + dy * dy; if (r2 > 0.2401) { const s = 0.49 / Math.sqrt(r2); x = .5 + dx * s; y = .5 + dy * s; } }
-      p[2 * i] = x; p[2 * i + 1] = y;
+      p[2 * i] = clamp(x, 0, 1); p[2 * i + 1] = clamp(y, 0, 1);
     }
   }
 }
 
 // ============================================================ render
 const plate = new Plate();
-plate.gpu = initGpu();
-if (plate.gpu) plate.gpuReset = true;
 const cv = $("cv"), g = cv.getContext("2d");
 const off = document.createElement("canvas"); off.width = off.height = GRID;
-const og = off.getContext('2d');
-function renderSand() {
-  if (plate.gpu) { plate.gpu.render(); return; }
-  og.fillStyle = '#10151c'; og.fillRect(0, 0, GRID, GRID);
-  const k = Math.floor(plate.mass * GRAINS), p = plate.p;
-  og.fillStyle = '#e8c68c';
-  for (let i = 0; i < k; i++) {
-    if (p[2*i+1] > 1) continue;
-    const size = 1 + (i % 3) * 0.25;
-    og.fillRect(p[2*i] * (GRID-1), p[2*i+1] * (GRID-1), size, size);
-  }
+const og = off.getContext("2d"), img = og.createImageData(GRID, GRID), px = new Uint32Array(img.data.buffer);
+const dens = new Float32Array(GRID * GRID), sm = new Float32Array(GRID * GRID);
+const lut = new Uint32Array(64);
+for (let i = 0; i < 64; i++) {
+  const v = 1 - Math.exp(-i / 2 * 0.9), c = [26, 29, 36].map((b, j) => b + ([226, 196, 140][j] - b) * v);
+  lut[i] = (255 << 24) | (Math.round(c[2]) << 16) | (Math.round(c[1]) << 8) | Math.round(c[0]);
 }
-function draw(t) {
+function renderSand() {
+  dens.fill(0);
+  const k = Math.floor(plate.mass * GRAINS), p = plate.p;
+  for (let i = 0; i < k; i++) {
+    const y = p[2 * i + 1]; if (y > 1) continue;
+    dens[(((y * (GRID - 1)) | 0) * GRID) + clamp(((p[2 * i] * (GRID - 1)) | 0), 0, GRID - 1)]++;
+  }
+  for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) {
+    const o = y * GRID + x;
+    let v = dens[o];
+    if (y > 0) v += 0.5 * dens[o - GRID]; if (y < GRID - 1) v += 0.5 * dens[o + GRID];
+    if (x > 0) v += 0.5 * dens[o - 1]; if (x < GRID - 1) v += 0.5 * dens[o + 1];
+    px[o] = lut[Math.min((v * 2) | 0, 63)];
+  }
+  og.putImageData(img, 0, 0);
+}
+function draw() {
   const W = cv.width, pl = plate;
   g.imageSmoothingEnabled = true;
   g.save();
   if (pl.falling && pl.fallT < 16) g.translate((Math.random() - .5) * 5, (Math.random() - .5) * 5);
-  g.drawImage(plate.gpu ? plate.gpu.canvas : off, 0, 0, W, W);
-  g.lineWidth = 3;
-  g.strokeStyle = "rgba(255,210,140,.3)";     // constant: nothing on the plate pulses with the music
-  if (pl.shape === "circle") {
-    g.beginPath(); g.rect(0, 0, W, W); g.arc(W / 2, W / 2, W * 0.495, 0, Math.PI * 2);
-    g.fillStyle = "#101216"; g.fill("evenodd");
-    g.beginPath(); g.arc(W / 2, W / 2, W * 0.495, 0, Math.PI * 2); g.stroke();
-  } else g.strokeRect(1.5, 1.5, W - 3, W - 3);
+  g.drawImage(off, 0, 0, W, W);
+  g.lineWidth = 3 + 4 * pl.hitFlash;
+  g.strokeStyle = `rgba(255,210,140,${Math.min(1, (30 + 120 * pl.level + 110 * pl.hitFlash) / 255)})`;
+  g.strokeRect(1.5, 1.5, W - 3, W - 3);
   g.restore();
-
-  g.save(); g.scale(W / 640, W / 640);
-  g.font = "600 17px system-ui, sans-serif"; g.textBaseline = "top";
+  g.fillStyle = "rgba(235,225,200,.8)"; g.font = "600 17px system-ui, sans-serif"; g.textBaseline = "top";
   let txt;
-  if (pl.top) txt = `${noteName(pl.pitch || pl.freq)} · ${(pl.pitch || pl.freq).toFixed(0)} Hz · ${pl.db.toFixed(0)} dBFS · mode ${pl.top[0]},${pl.top[1]}`;
-  else if (!pl.set.physical || (ctx && !pl.lastReport)) txt = "loading plate model…";
+  if (pl.level > 0.02 && pl.top) txt = `${pl.db.toFixed(0)} dB · ${pl.freq.toFixed(0)} Hz · mode ${pl.top[0]},${pl.top[1]}`;
+  else if (pl.useRft && pl.rftState === "building") txt = "loading…";
   else txt = ctx ? "listening…" : "";
-  if (pl.coverage < .95 && pl.top) txt += ` · field ${Math.round(pl.coverage*100)}%`;
-  g.fillStyle = "rgba(235,225,200,.8)"; g.fillText(txt, 14, 12);
+  g.fillText(txt, 14, 12);
   g.fillStyle = "rgba(0,0,0,.45)"; g.fillRect(14, 40, 150, 6);
   g.fillStyle = "rgba(226,196,140,.9)"; g.fillRect(14, 40, 150 * Math.min(pl.level, 1), 6);
-  g.restore();
-  // the only colour: a faint glow behind the plate, in the pitch's colour
-  const st = document.documentElement.style;
-  st.setProperty("--glow", pl.light.map(c => Math.round(c * 255)).join(","));
-  st.setProperty("--ga", pl.glow.toFixed(3));
 }
-let last = 0, sandClock = 0;
+let last = 0;
 function loop(t) {
   requestAnimationFrame(loop);
   if (t - last < 15) return;                  // cap near 60 fps
-  const elapsed = Math.min(.1,(t-last)/1000); last = t;
+  last = t;
   if (analyser) analyser.getFloatTimeDomainData(buf);
-  bowUpdate();
   plate.analyse(buf);
-  sandClock += elapsed;
-  while (sandClock >= 1/60) { plate.step(); sandClock -= 1/60; }
+  plate.step();
   renderSand();
-  draw(t);
+  draw();
   $("bShake").disabled = !(plate.mass > 0 && !plate.falling);
 }
 requestAnimationFrame(loop);
 
 $("bShake").onclick = () => plate.shakeOff();
-
-// ---- bowing: drag across the plate. The pointer position picks the modes that move most there
-// (a node can't be bowed: touching it silences those modes); speed is the bow pressure. The
-// result is real modal sound that goes through the same ears as any other audio.
-const bow = { down: false, x: .5, y: .5, t: 0, speed: 0, bus: null, oscs: [], gains: [] };
-function bowSetup() {
-  if (bow.bus) return;
-  bow.bus = ctx.createGain(); bow.bus.gain.value = 0.9;
-  bow.bus.connect(analyser); bow.bus.connect(ctx.destination);
-  for (let k = 0; k < 6; k++) {
-    const o = ctx.createOscillator(), gn = ctx.createGain(); gn.gain.value = 0;
-    o.connect(gn); gn.connect(bow.bus); o.start(); bow.oscs.push(o); bow.gains.push(gn);
-  }
-}
-function bowPos(e) { const r = cv.getBoundingClientRect(); return [clamp((e.clientX - r.left) / r.width, 0, 1), clamp((e.clientY - r.top) / r.height, 0, 1)]; }
-cv.addEventListener("pointerdown", e => {
-  ensureCtx(); bowSetup(); cv.setPointerCapture(e.pointerId); cv.style.cursor = "grabbing";
-  [bow.x, bow.y] = bowPos(e); bow.t = performance.now(); bow.down = true;
-});
-cv.addEventListener("pointermove", e => {
-  if (!bow.down) return;
-  const [x, y] = bowPos(e), now = performance.now(), dt = Math.max(1, now - bow.t) / 1000;
-  bow.speed = Math.max(bow.speed, Math.min(Math.hypot(x - bow.x, y - bow.y) / dt, 3) * 0.3);
-  bow.x = x; bow.y = y; bow.t = now;
-});
-const bowEnd = () => { bow.down = false; cv.style.cursor = "grab"; };
-cv.addEventListener("pointerup", bowEnd); cv.addEventListener("pointercancel", bowEnd);
-function bowUpdate() {
-  if (!bow.bus) return;
-  bow.speed *= 0.9;                              // rosin: no motion, no sound
-  const drive = bow.down ? clamp(bow.speed * 6, 0, 1) : 0, M = plate.mf.length;
-  const idx = clamp(Math.floor(bow.y * FG), 0, FG - 1) * FG + clamp(Math.floor(bow.x * FG), 0, FG - 1);
-  const score = new Float32Array(M);
-  for (let i = 0; i < M; i++) score[i] = Math.abs(plate.set.W[i * FG * FG + idx]) / Math.sqrt(1 + plate.mf[i] / 400);
-  topK(score, 6).forEach((i, k) => {
-    bow.oscs[k].frequency.setTargetAtTime(plate.mf[i], ctx.currentTime, 0.03);
-    bow.gains[k].gain.setTargetAtTime(drive * score[i] * 0.12, ctx.currentTime, 0.04);
-  });
-}
-
-// ---- plate shape: square (free-edge, Ritz modes) or circular (Bessel modes); sets load on demand
-const modeSets = {};
-async function useShape(shape) {
-  try {
-    modeSets[shape] = modeSets[shape] || await loadModeSet(shape);
-    plate.setModes(modeSets[shape], shape);
-    $("bShape").textContent = shape === "square" ? "◯ Circular plate" : "▢ Square plate";
-  } catch (e) { setStatus("Couldn't load the " + shape + " plate (" + e.message + ")."); }
-}
-$("bShape").onclick = async () => { $("bShape").disabled = true; await useShape(plate.shape === "square" ? "circle" : "square"); $("bShape").disabled = false; };
-useShape("square");
-// RFT remains in the repository for transform research. It does not drive the physical solver.
-plate.rftState = 'not used by physical model';
+// matrices load in the background; until they're in, the plate uses a plain spectrum
+Promise.all([loadRft(RFT_LONG), loadRft(RFT_SHORT)]).then(d => {
+  plate.rftData = d;
+  if (ctx) plate.banks.RFT = rftBank(plate.mf, ...d);
+  plate.rftState = "ready";
+}).catch(e => { plate.rftState = "failed"; setStatus("Analysis data failed to load (" + e.message + "); using fallback."); });
 </script>
 </body>
 </html>
