@@ -1,36 +1,36 @@
 # Cymantix
 
-[Web player](https://anharmoniclabs.github.io/cymantix/): a virtual Chladni plate driven by incoming audio. Choose Demo or share a tab with audio. Drag on the plate to bow it; Shake off redistributes sand. No sensitivity knobs or pitch-to-pattern presets.
+A Chladni sand plate that reacts to music. Sound drives a virtual square plate
+(modes `cos(nπx)cos(mπy) − s·cos(mπx)cos(nπy)`, `f ≈ F₀(n²+m²)`); each mode is
+excited by the energy near its own resonance, loudness sets the drive, and the
+sand slides to the nodal lines.
 
-The browser integrates damped modal oscillators at the audio sample rate, using solved free-edge square steel plate modes and free-edge circular modes. A fixed off-centre actuator couples the waveform to each mode through its modal mass and shape. Resonances and ring-down emerge from this system; frequencies never retune to the music.
+**Web player:** https://anharmoniclabs.github.io/cymantix/ — play a demo, an audio
+file, a shared tab's audio, or the microphone. Everything runs in your browser.
 
-Sand follows the gradient of time-averaged acceleration energy. The strongest 12 modes retain their phase covariance; all remaining modes contribute diagonal energy, avoiding false empty regions from discarded broadband energy. Grain transport is an approximation, not a discrete contact-mechanics simulation. A real plate requires measured geometry, mounting, damping and actuator calibration.
+## The analysis transform
 
-Rendering is 1024 × 1024, with 262,144 individual GPU grains or 26,000 CPU grains. Sand is visible before playback and stops moving after vibration decays. Density-dependent contact spreading prevents grains from collapsing into invisible piles; sub-cell drift and bilinear sampling preserve nodal detail. [Before/after comparison](docs/sand-transport/README.md). FFT, orthonormal DCT-II, NUDFT, constant-Q and the stored 610-point RFT all read PCM snapshots from the **same AudioWorklet input** that drives the plate. A worker runs the analysis so it cannot block the audio-rate solver. Open **Live signal** to see the captured waveform, spectrum, measured peaks and numerical energy/reconstruction checks.
+The plate listens through the Resonant Fourier Transform (L. M. Minier,
+*What I Got Wrong*, Eqs. 1–2):
 
-These transforms analyse the single actuator signal; summing their outputs as independent forces would count the same sound repeatedly. The finite plate response is not a lossless one-to-one encoding of sound. Stereo is arithmetically downmixed to the one point actuator, preserving phase (opposite channels can cancel). The FFT/DCT cover their entire discrete band to Nyquist; NUDFT and constant-Q probe 160 logarithmic frequencies plus each retained plate resonance. The RFT's 610-sample window is shorter than the 4096-sample FFT/DCT window; its coefficients are not claimed to be independent physical Fourier bins.
-
-See [MODEL.md](MODEL.md) for constants and limitations. Regenerate mode data with `tools/export_modes.py` and `tools/export_free_circle.py`.
-
-Verification:
-
-```sh
-node tools/verify-physics.cjs
-node tools/verify-signal.cjs
-python -m http.server 8765
-# in another terminal, with Playwright and Chromium installed:
-node tools/verify-web.cjs
+```
+f_k = {(k+1) φ},   Φ_nk = N^-1/2 exp(i 2π f_k n),   U = Φ (Φ^H Φ)^-1/2
 ```
 
-## Desktop (Linux, PipeWire/Pulse)
+`U` is unitary (energy-preserving). Dimensions are Fibonacci, the best-conditioned
+(κ(G) → 2.848): **web** N = 1597 / 610, **desktop** N = 2584 / 987. A plain FFT is one
+click away for comparison. No advantage over the FFT is claimed; the paper retracts
+those claims and this only uses the finite construction.
 
-The desktop app is the earlier transform-based visualizer; it does not run the browser's audio-rate solver.
+`tools/export_rft.py` regenerates `data/rft_*.bin` (int16-quantised `U^H`) for the web
+player.
 
-```sh
-cd desktop
-python -m venv .venv
-.venv/bin/pip install -r requirements.txt
-./run.sh
+## Desktop app (Linux, PipeWire/Pulse)
+
+Listens to whatever your system plays and shows MPRIS transport controls.
+
+```
+cd desktop && python -m venv .venv && .venv/bin/pip install -r requirements.txt && ./run.sh
 ```
 
-The circular rim is free to vibrate. `tools/verify-circle.cjs` checks a deliberately rim-trapped initial pile through a 38 Hz → 198 Hz change without shaking or reseeding. Input frequency and plate resonance have separate labels. See [MODEL.md](MODEL.md) for the changed mounting assumption.
+The first run builds the RFT matrices (~45 s) and caches them in `~/.cache/cymatic-widget/`.
