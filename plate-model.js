@@ -3,11 +3,11 @@ class PhysicalPlateModel {
   constructor(context, input, receive, fail) {
     this.context=context;this.input=input;this.receive=receive;this.fail=fail;this.revision=0;
     this.analysis=null;this.analysisBusy=false;this.analysisError=null;this.fieldBusy=false;this.field=null;
-    this.fieldWorker=new Worker('field-worker.js');
+    this.fieldWorker=new Worker('field-worker.js?v=lab-20261007-1');
     this.fieldWorker.onmessage=({data})=>{this.fieldBusy=false;if(data.revision!==this.revision)return;if(data.error){this.fail(data.error);return;}this.field=data;};
     this.fieldWorker.onerror=()=>this.fail('Plate field worker stopped. Reload to restart.');
     try {
-      this.analysisWorker=new Worker('signal-worker.js');
+      this.analysisWorker=new Worker('signal-worker.js?v=lab-20261007-1');
       this.analysisWorker.onmessage=({data})=>{
         this.analysisBusy=false;
         if(data.revision!==this.revision)return;
@@ -19,7 +19,7 @@ class PhysicalPlateModel {
   }
   async start() {
     try {
-      await this.context.audioWorklet.addModule('plate-worklet.js');
+      await this.context.audioWorklet.addModule('plate-worklet.js?v=lab-20261007-1');
       this.node=new AudioWorkletNode(this.context,'virtual-plate');
       this.node.port.onmessage=({data})=>{
         if(data.revision!==this.revision)return;
@@ -64,7 +64,7 @@ class PhysicalPlateModel {
   }
 }
 async function loadFreeCircle(grid) {
-  const response=await fetch('data/free-circle.json');if(!response.ok)throw new Error('Circular plate data unavailable');
+  const response=await fetch('data/free-circle.json?v=lab-20261007-1');if(!response.ok)throw new Error('Circular plate data unavailable');
   const {profiles,boundary,radialScale=1}=await response.json(),frequencies=[],la=[],lb=[],fields=[];
   if(boundary!=='free')throw new Error('Circular plate boundary mismatch');
   for(const profile of profiles) for(const sine of profile.m===0?[false]:[false,true]) {

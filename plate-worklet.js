@@ -1,4 +1,4 @@
-import './modal-core.js';
+import './modal-core.js?v=lab-20261007-1';
 class PlateProcessor extends AudioWorkletProcessor {
   constructor() {
     super(); this.bank=null;this.revision=0; this.pcm=new Float32Array(4096); this.cursor=0; this.endSample=0; this.reportCount=0;

@@ -1,4 +1,4 @@
-importScripts('modal-core.js','field-core.js');
+importScripts('modal-core.js?v=lab-20261007-1','field-core.js?v=lab-20261007-1');
 let bank,W,grid,shape,revision=0;
 onmessage=({data})=>{
  try{

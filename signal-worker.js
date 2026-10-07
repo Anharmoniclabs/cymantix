@@ -1,4 +1,4 @@
-importScripts('signal-analysis.js');
+importScripts('signal-analysis.js?v=lab-20261007-1');
 let rft=null,rftError=null;
 fetch('data/rft_610.bin').then(r=>{if(!r.ok)throw Error('HTTP '+r.status);return r.arrayBuffer();}).then(buffer=>{
   const n=610;if(buffer.byteLength!==4+4*n*n)throw Error('RFT matrix size mismatch');
