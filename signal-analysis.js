@@ -1,4 +1,4 @@
-// Analysis of the exact PCM window also consumed by the original sand engine. All transforms
+// Analysis of the exact PCM window sent by the plate worklet. All transforms
 // describe the same input; their energies must never be added as extra force.
 (function(root) {
   'use strict';
@@ -63,9 +63,16 @@
     amplitude[0]*=.5;amplitude[n/2]*=.5;
     const rebuilt=fft(raw.re,raw.im,true).re;
     let reconstructionError=0;for(let i=0;i<n;i++)reconstructionError=Math.max(reconstructionError,Math.abs(rebuilt[i]-input[i]));
-    const result={rate,sampleCount:n,windowSeconds:n/rate,rms:Math.sqrt(energy/n),fft:peak(amplitude,k=>k*rate/n),dct:peak(cosine,k=>k*rate/(2*n)),nudft:peak(nudft.amplitude,k=>frequencies[k]),cqt:peak(cqt.amplitude,k=>frequencies[k]),
+    const fftPeak=peak(amplitude,k=>k*rate/n);
+    const bin=Math.round(fftPeak.frequencyHz*n/rate);
+    if(bin>0&&bin<amplitude.length-1&&fftPeak.amplitude>1e-12){
+      const a=Math.log(amplitude[bin-1]+1e-30),b=Math.log(amplitude[bin]+1e-30),c=Math.log(amplitude[bin+1]+1e-30);
+      const denominator=a-2*b+c;
+      if(Math.abs(denominator)>1e-14)fftPeak.frequencyHz=(bin+Math.max(-.5,Math.min(.5,.5*(a-c)/denominator)))*rate/n;
+    }
+    const result={rate,sampleCount:n,windowSeconds:n/rate,rms:Math.sqrt(energy/n),fft:fftPeak,dct:peak(cosine,k=>k*rate/(2*n)),nudft:peak(nudft.amplitude,k=>frequencies[k]),cqt:peak(cqt.amplitude,k=>frequencies[k]),
       fftEnergyError:Math.abs((sumSquares(raw.re)+sumSquares(raw.im))/n-energy)/Math.max(energy,1e-30),dctEnergyError:Math.abs(sumSquares(cosine)-energy)/Math.max(energy,1e-30),reconstructionError,
-      // Bounded display arrays; transforms above use the full input window.
+      // Bounded display arrays; no decimation enters the physical solver.
       waveform:Float32Array.from(input.slice(-512)),spectrum:Float32Array.from(amplitude),frequencies:Float32Array.from(frequencies),nudftAmplitude:Float32Array.from(nudft.amplitude),cqtAmplitude:Float32Array.from(cqt.amplitude),dctCoefficients:Float32Array.from(cosine)};
     if(rft) {
       const count=rft.n, offset=n-count, coefficients=new Float32Array(count*2);

@@ -1,4 +1,4 @@
-name: Signal measurements
+name: Cymantix scientific checks
 on: [push, pull_request]
 jobs:
   verify:
@@ -8,9 +8,27 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node tools/verify-signal.cjs
+      - run: |
+          node tools/verify-physics.cjs
+          node tools/verify-covariance.cjs
+          node tools/verify-worklet.cjs
+          node tools/verify-field.cjs
+          node tools/verify-grains.cjs
+          node tools/verify-signal.cjs
+          node tools/verify-circle-model.cjs
+      - run: |
+          python3 -m pip install 'numpy>=2,<3'
+          OPENBLAS_NUM_THREADS=2 python3 tools/verify-square.py
       - run: npm install --no-save playwright@1.61.1
       - run: npx playwright install --with-deps chromium
       - run: |
-          python3 -m http.server 8765 > /tmp/server.log 2>&1 &
-          node tools/verify-measurements.cjs
+          python3 -m http.server 8765 > /tmp/cymantix-server.log 2>&1 &
+          node tools/verify-lab.cjs
+          node tools/verify-music.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cymantix-browser-evidence
+          path: |
+            /tmp/cymantix-lab-*.png
+            /tmp/cymantix-field-*.png

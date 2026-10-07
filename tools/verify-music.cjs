@@ -1,0 +1,10 @@
+const assert=require('node:assert/strict'),{chromium}=require('playwright');
+(async()=>{const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||undefined,args:['--no-sandbox','--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']});try{const page=await browser.newPage();await page.goto('http://127.0.0.1:8765/');await page.waitForFunction(()=>modelReady);await page.click('#bDemo');
+await page.evaluate(()=>{window.musicBus=ctx.createGain();musicBus.gain.value=.08;const frequencies=[74.097,133.695,191.7358,350.72,425.2988,523.25,880,1234.5];window.musicOsc=frequencies.map(f=>{const o=ctx.createOscillator();o.frequency.value=f;o.connect(musicBus);o.start();return o;});useSource(musicBus,true,()=>musicOsc.forEach(o=>o.stop()));});
+await page.waitForFunction(()=>plate.lastField?.rank>3&&physicalModel.analysis);await page.waitForTimeout(3000);
+const before=await page.evaluate(()=>({field:Array.from(plate.E),rms:plate.lastField.rms,coverage:plate.lastField.coverage,rank:plate.lastField.rank,computeMs:plate.lastField.computeMs,lag:(physicalModel.endSample-plate.lastField.endSample)/ctx.sampleRate}));
+await page.evaluate(()=>{window.savedGrains=plate.gpuReset;musicOsc.forEach((o,i)=>o.frequency.setValueAtTime([108,210,310,510,710,910,1510,2110][i],ctx.currentTime));});await page.waitForTimeout(2500);
+const after=await page.evaluate(()=>({field:Array.from(plate.E),rms:plate.lastField.rms,reset:plate.gpuReset}));let difference=0;for(let i=0;i<before.field.length;i++)difference+=Math.abs(before.field[i]-after.field[i]);difference/=before.field.length;
+assert(difference>.005);assert(before.rms>0&&after.rms>0);assert.equal(after.reset,false);assert(before.lag<2);
+console.log('PASS: eight-tone input produces a different computed field when frequencies change, with no grain reset.',{rank:before.rank,coverage:before.coverage,computeMs:before.computeMs,lag:before.lag,meanFieldChange:difference});
+}finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});
