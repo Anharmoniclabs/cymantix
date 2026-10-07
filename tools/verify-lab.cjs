@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict'),{chromium}=require('playwright');
-(async()=>{const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||undefined,args:['--no-sandbox','--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
+(async()=>{const launchOptions={headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||undefined,args:['--no-sandbox','--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']};let browser=await chromium.launch(launchOptions);
 try{
 for(const cpu of [false,true]){
  const page=await browser.newPage({viewport:{width:1440,height:1050}}),errors=[];page.on('pageerror',e=>errors.push(e.stack||e.message));
@@ -7,7 +7,7 @@ for(const cpu of [false,true]){
  await page.goto('http://127.0.0.1:8765/'+(cpu?'?cpu':''));await page.waitForFunction(()=>modelReady);
  await page.click('#bDemo');await page.waitForFunction(()=>plate.lastField&&physicalModel.analysis?.rft);
  await page.waitForTimeout(6000);
- const report=await page.evaluate(()=>({visibility:document.visibilityState,gpu:!!plate.gpu,modes:plate.mf.length,rank:plate.lastField.rank,coverage:plate.lastField.coverage,rms:plate.lastField.rms,level:plate.level,computeMs:plate.lastField.computeMs,fft:physicalModel.analysis.fft.frequencyHz,workletSeconds:physicalModel.endSample/ctx.sampleRate,lag:(physicalModel.endSample-plate.lastField.endSample)/ctx.sampleRate,fftError:physicalModel.analysis.fftEnergyError}));
+ const report=await page.evaluate(()=>({frameCpuMs:lastFrameMs,frameInterval,visibility:document.visibilityState,gpu:!!plate.gpu,modes:plate.mf.length,rank:plate.lastField.rank,coverage:plate.lastField.coverage,rms:plate.lastField.rms,level:plate.level,computeMs:plate.lastField.computeMs,fft:physicalModel.analysis.fft.frequencyHz,workletSeconds:physicalModel.endSample/ctx.sampleRate,lag:(physicalModel.endSample-plate.lastField.endSample)/ctx.sampleRate,fftError:physicalModel.analysis.fftEnergyError}));
  assert.equal(report.gpu,!cpu);assert(report.modes===128);assert(report.coverage>.99);assert(report.rms>0&&report.level>0);assert(report.lag<1,`Display latency exceeds one second: ${JSON.stringify(report)}`);assert(report.fftError<1e-10);
  await page.screenshot({path:`/tmp/cymantix-lab-${cpu?'cpu':'gpu'}.png`,fullPage:true});
  await page.click('#bField');await page.screenshot({path:`/tmp/cymantix-field-${cpu?'cpu':'gpu'}.png`,fullPage:true});
@@ -23,6 +23,8 @@ for(const cpu of [false,true]){
  await page.click('#bStop');
  await page.setViewportSize({width:390,height:844});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  assert.deepEqual(errors,[]);console.log(cpu?'CPU':'GPU',report);await page.close();
+ // Isolate renderer performance from the previous browser's GPU/audio resources.
+ if(!cpu){await browser.close();browser=await chromium.launch(launchOptions);}
 }
 console.log('PASS: live worklet, covariance field, five transforms, square/circle, GPU/CPU, shared-tab routing/no echo, silence, mobile.');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

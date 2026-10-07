@@ -1,4 +1,4 @@
-importScripts('modal-core.js?v=lab-20261007-3','field-core.js?v=lab-20261007-3');
+importScripts('modal-core.js?v=lab-20261007-4','field-core.js?v=lab-20261007-4');
 let bank,W,grid,shape,fieldPort,revision=0,latest=null,timer=null,lastStart=-Infinity;
 function request(data){
  if(data.revision!==revision||!bank)return;

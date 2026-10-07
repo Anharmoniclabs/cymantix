@@ -93,14 +93,14 @@ class Plate{
 }
 
 const plate=new Plate();plate.gpu=initGpu();
-const cv=$('cv'),g=cv.getContext('2d'),off=document.createElement('canvas');off.width=off.height=GRID;const og=off.getContext('2d');
+const cv=$('cv'),g=cv.getContext('2d',{alpha:false,willReadFrequently:!plate.gpu}),off=document.createElement('canvas');off.width=off.height=GRID;const og=off.getContext('2d',{alpha:false,willReadFrequently:true});const sandPixels=og.createImageData(GRID,GRID),sandWords=new Uint32Array(sandPixels.data.buffer);
 const fieldCanvas=document.createElement('canvas');fieldCanvas.width=fieldCanvas.height=FG;const fg=fieldCanvas.getContext('2d');let paintedField=null;
 function draw(){
  if(view==='field'){
   if(paintedField!==plate.lastField){paintedField=plate.lastField;const im=fg.createImageData(FG,FG);for(let k=0;k<plate.E.length;k++){const a=Math.sqrt(plate.E[k]),t=clamp(a,0,1);im.data[4*k]=18+226*t*t;im.data[4*k+1]=28+191*t;im.data[4*k+2]=39+121*t;im.data[4*k+3]=255;}fg.putImageData(im,0,0);}
   g.imageSmoothingEnabled=true;g.drawImage(fieldCanvas,0,0,GRID,GRID);
  }else if(plate.gpu){plate.gpu.render();g.drawImage(plate.gpu.canvas,0,0,GRID,GRID);}else{
-  og.fillStyle='#10151c';og.fillRect(0,0,GRID,GRID);og.fillStyle='#e8c68c';for(let i=0;i<GRAINS;i++){if(plate.p[2*i+1]>1)continue;const size=1+(i%3)*.25;og.fillRect(plate.p[2*i]*GRID,plate.p[2*i+1]*GRID,size,size);}g.drawImage(off,0,0);
+  sandWords.fill(0xff1c1510);for(let i=0;i<GRAINS;i++){const x=Math.min(GRID-2,Math.floor(plate.p[2*i]*(GRID-1))),y=Math.min(GRID-2,Math.floor(plate.p[2*i+1]*(GRID-1)));if(y<0||y>=GRID-1)continue;const k=y*GRID+x;sandWords[k]=0xff8cc6e8;if(i%3)sandWords[k+1]=0xff709eb9;if(i%3===2)sandWords[k+GRID]=0xff709eb9;}og.putImageData(sandPixels,0,0);g.drawImage(off,0,0);
  }
  if(plate.shape==='circle'){g.beginPath();g.rect(0,0,GRID,GRID);g.arc(GRID/2,GRID/2,GRID*.497,0,Math.PI*2);g.fillStyle='#0c1219';g.fill('evenodd');}
  // Mark the modeled drive point, not a draggable shape or generated preset.
@@ -139,6 +139,6 @@ function readout(){
  $('checks').textContent=`FFT/DCT relative energy errors: ${a.fftEnergyError.toExponential(1)} / ${a.dctEnergyError.toExponential(1)}. Inverse FFT maximum error ${a.reconstructionError.toExponential(1)}. RFT ${a.rft?'energy error '+a.rft.energyError.toExponential(1):a.rftState}. Frequency bin spacing ${(a.rate/a.sampleCount).toFixed(2)} Hz. Constant-Q windows are limited by the snapshot length.`;
  const c=$('signalCanvas'),p=c.getContext('2d'),w=c.width,h=c.height;p.fillStyle='#101821';p.fillRect(0,0,w,h);p.strokeStyle='#293743';p.lineWidth=1;for(const y of [54,100,175]){p.beginPath();p.moveTo(0,y);p.lineTo(w,y);p.stroke();}p.strokeStyle='#e8c58b';p.beginPath();for(let i=0;i<a.waveform.length;i++){const x=i*w/(a.waveform.length-1),y=54-a.waveform[i]*40;i?p.lineTo(x,y):p.moveTo(x,y);}p.stroke();p.strokeStyle='#7ed7d2';p.beginPath();for(let x=0;x<w;x++){const freq=20*((a.rate/2)/20)**(x/(w-1)),bin=Math.min(a.spectrum.length-1,Math.round(freq*a.sampleCount/a.rate)),db=20*Math.log10(a.spectrum[bin]+1e-12),y=180-clamp((db+100)/100,0,1)*75;x?p.lineTo(x,y):p.moveTo(x,y);}p.stroke();p.fillStyle='#8e9fab';p.font='11px system-ui';p.fillText('Waveform · full scale ±1',4,13);p.fillText('Spectrum · −100 to 0 dBFS',4,95);for(const [x,text]of [[4,'20 Hz'],[w*.33,'200 Hz'],[w*.66,'2 kHz'],[w-55,(a.rate/2000).toFixed(1)+' kHz']])p.fillText(text,x,201);
 }
-let last=0,clock=0,lastReadout=0;function loop(t){requestAnimationFrame(loop);if(t-last<(plate.gpu?15:32))return;const dt=Math.min(.05,(t-last)/1000);last=t;if(!modelReady)return;plate.update();if(plate.gpu){clock+=dt;while(clock>=1/60){plate.step();clock-=1/60;}}else{plate.step();}draw();if(t-lastReadout>=100){readout();lastReadout=t;}}
+let last=0,clock=0,lastReadout=0,lastFrameMs=0,frameInterval=0;function loop(t){requestAnimationFrame(loop);if(t-last<(plate.gpu?15:32))return;const frameStart=performance.now();frameInterval=t-last;const dt=Math.min(.05,(t-last)/1000);last=t;if(!modelReady)return;plate.update();if(plate.gpu){clock+=dt;while(clock>=1/60){plate.step();clock-=1/60;}}else{plate.step();}draw();if(t-lastReadout>=100){readout();lastReadout=t;}lastFrameMs=performance.now()-frameStart;}
 for(const id of ['bTab','bMic','bFile','bDemo','bTone'])$(id).disabled=true;
 useShape('square').then(()=>{if(modelReady)for(const id of ['bTab','bMic','bFile','bDemo','bTone'])$(id).disabled=false;});requestAnimationFrame(loop);
