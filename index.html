@@ -59,6 +59,12 @@
   <input type="file" id="fi" accept="audio/*" hidden>
   <div class="status" id="st">Pick a source to start. Nothing leaves your browser.</div>
 
+  <details id="measurements">
+    <summary>Live signal measurements</summary>
+    <p id="signalStatus">Start an audio source. All five analyses read the same input window used by the original sand engine.</p>
+    <pre id="signalValues" style="white-space:pre-wrap;font-size:12px;line-height:1.6"></pre>
+    <p style="font-size:12px">FFT: windowed spectrum. DCT: cosine coefficients. NUDFT: projections at nonuniform frequencies, including plate modes. Constant-Q: variable-window projections, limited by the available window. RFT: stored quantized 610-sample basis. These are complementary measurements, not five independent sources of energy. Values are digital dBFS, not calibrated physical vibration.</p>
+  </details>
   <details>
     <summary>What am I looking at?</summary>
     <p>A virtual square plate has resonant modes
@@ -104,6 +110,9 @@ function useSource(node, audible, stop) {
   if (stopSrc) stopSrc();
   stopSrc = stop || null;
   if (srcNode) try { srcNode.disconnect(); } catch (e) {}
+  signalRevision++;
+  signalReport=null;
+  $("signalValues").textContent="";
   srcNode = node;
   node.connect(analyser);
   outGain.gain.value = audible ? 1 : 0;      // mic / captured tab must not echo back
@@ -488,12 +497,51 @@ function draw() {
   g.fillStyle = "rgba(0,0,0,.45)"; g.fillRect(14, 40, 150, 6);
   g.fillStyle = "rgba(226,196,140,.9)"; g.fillRect(14, 40, 150 * Math.min(pl.level, 1), 6);
 }
+// Analysis runs off the rendering thread; the original plate still consumes buf.
+let signalWorker=null, signalBusy=false, signalLast=0, signalRevision=0, signalReport=null;
+function showSignal(r) {
+  const hz=v=>v.toFixed(1)+" Hz", err=v=>v.toExponential(2);
+  const db=r.rms>0?(20*Math.log10(r.rms)).toFixed(1):"−∞";
+  $("signalStatus").textContent=`${r.rate} samples/s · ${r.sampleCount} samples · ${(1000*r.windowSeconds).toFixed(1)} ms window · ${db} dBFS RMS`;
+  $("signalValues").textContent=[
+    `FFT peak: ${hz(r.fft.frequencyHz)} · bin spacing ${hz(r.rate/r.sampleCount)}`,
+    `DCT strongest cosine: ${hz(r.dct.frequencyHz)}`,
+    `NUDFT strongest sampled frequency: ${hz(r.nudft.frequencyHz)}`,
+    `Constant-Q strongest sampled frequency: ${hz(r.cqt.frequencyHz)}`,
+    `RFT: ${r.rftState}${r.rft?" · "+r.rft.sampleCount+" samples · relative energy error "+err(r.rft.energyError):r.rftError?" · "+r.rftError:""}`,
+    `FFT relative energy error: ${err(r.fftEnergyError)}`,
+    `DCT relative energy error: ${err(r.dctEnergyError)}`,
+    `Inverse FFT maximum sample error: ${err(r.reconstructionError)}`
+  ].join("\n");
+}
+function measureSignal(samples,t) {
+  if(!analyser || signalBusy || t-signalLast<150)return;
+  if(!signalWorker) {
+    try {
+      signalWorker=new Worker('signal-worker.js');
+      signalWorker.onmessage=({data})=>{
+        signalBusy=false;
+        if(data.revision!==signalRevision)return;
+        if(data.error){$("signalStatus").textContent="Measurement error: "+data.error;return;}
+        signalReport=data;showSignal(data);
+      };
+      signalWorker.onerror=()=>{
+        signalBusy=false;signalWorker.terminate();signalWorker=null;
+        $("signalStatus").textContent="Signal measurements could not load.";
+      };
+    }catch(e){$("signalStatus").textContent="Signal measurements unavailable: "+e.message;return;}
+  }
+  signalLast=t;signalBusy=true;
+  const pcm=samples.slice();
+  signalWorker.postMessage({pcm,rate:RATE,frequencies:plate.mf,revision:signalRevision},[pcm.buffer]);
+}
 let last = 0;
 function loop(t) {
   requestAnimationFrame(loop);
   if (t - last < 15) return;                  // cap near 60 fps
   last = t;
   if (analyser) analyser.getFloatTimeDomainData(buf);
+  measureSignal(buf,t);
   plate.analyse(buf);
   plate.step();
   renderSand();
