@@ -7,7 +7,7 @@ for(const cpu of [false,true]){
  await page.click('#bDemo');await page.waitForFunction(()=>plate.lastField&&physicalModel.analysis?.rft);
  await page.waitForTimeout(6000);
  const report=await page.evaluate(()=>({gpu:!!plate.gpu,modes:plate.mf.length,rank:plate.lastField.rank,coverage:plate.lastField.coverage,rms:plate.lastField.rms,level:plate.level,computeMs:plate.lastField.computeMs,fft:physicalModel.analysis.fft.frequencyHz,workletSeconds:physicalModel.endSample/ctx.sampleRate,lag:(physicalModel.endSample-plate.lastField.endSample)/ctx.sampleRate,fftError:physicalModel.analysis.fftEnergyError}));
- assert.equal(report.gpu,!cpu);assert(report.modes===128);assert(report.coverage>.99);assert(report.rms>0&&report.level>0);assert(report.lag<1);assert(report.fftError<1e-10);
+ assert.equal(report.gpu,!cpu);assert(report.modes===128);assert(report.coverage>.99);assert(report.rms>0&&report.level>0);assert(report.lag<1,`Display latency exceeds one second: ${JSON.stringify(report)}`);assert(report.fftError<1e-10);
  await page.screenshot({path:`/tmp/cymantix-lab-${cpu?'cpu':'gpu'}.png`,fullPage:true});
  await page.click('#bField');await page.screenshot({path:`/tmp/cymantix-field-${cpu?'cpu':'gpu'}.png`,fullPage:true});
  await page.click('#bStop');await page.waitForFunction(()=>plate.level===0&&physicalModel.analysis.rms<1e-6);
