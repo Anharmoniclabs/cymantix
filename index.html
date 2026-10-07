@@ -350,7 +350,7 @@ function initGpu() {
     };
     const tri = "void main(){ vec2 q=vec2(float((gl_VertexID<<1)&2), float(gl_VertexID&2)); gl_Position=vec4(q*2.0-1.0,0.0,1.0); }";
     const update = prog(tri, `precision highp float; precision highp int;
-uniform sampler2D uState, uField; uniform float uDrift,uKick,uMaxStep,uActive,uFrame,uFallT; uniform int uCircle,uMode;
+uniform sampler2D uState, uField, uDensity; uniform float uDrift,uKick,uMaxStep,uActive,uFrame,uFallT; uniform int uCircle,uMode;
 out vec4 o;
 ${GLSL_HASH}
 void main(){
@@ -379,7 +379,16 @@ void main(){
   float stableStep=min(uDrift,0.45*f.x/(dot(f.yz,f.yz)+1e-8));
   vec2 g=stableStep*f.yz; float m=length(g); if(m>uMaxStep) g*=uMaxStep/m;
   float kk=uKick*sqrt(max(f.x,0.0));
-  p=abs(p-g+vec2(n1,n2)*kk);
+  // Finite grain contact pressure prevents unlimited overlap at a node.
+  // Density is from the preceding render, in the same unflipped plate coordinates.
+  vec2 pixel=vec2(1.0/${GRID}.0), delta=2.0*pixel;
+  float center=texture(uDensity,p).r;
+  vec2 pressure=vec2(texture(uDensity,p+vec2(delta.x,0)).r-texture(uDensity,p-vec2(delta.x,0)).r,
+                     texture(uDensity,p+vec2(0,delta.y)).r-texture(uDensity,p-vec2(0,delta.y)).r);
+  pressure/=1.0+length(pressure);
+  float crowded=smoothstep(1.0,5.0,center);
+  vec2 contact=pressure*(0.7/${GRID}.0)*crowded*min(1.0,uDrift/0.008);
+  p=abs(p-g-contact+vec2(n1,n2)*(kk+0.5/${GRID}.0*crowded*min(1.0,uDrift/0.008)));
   p=vec2(p.x>1.0?2.0-p.x:p.x, p.y>1.0?2.0-p.y:p.y); p=clamp(p,0.0,1.0);
   if(uCircle==1){ vec2 d=p-0.5; float q=dot(d,d); if(q>0.2401) p=0.5+d*(0.49/sqrt(q)); }
   o=vec4(p,s.z,s.w);
@@ -423,10 +432,10 @@ void main(){
           bind(1, field); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, FG, FG, gl.RGBA, gl.FLOAT, fieldBuf);
         }
         gl.bindFramebuffer(gl.FRAMEBUFFER, sf[1 - cur]); gl.viewport(0, 0, GPU_TEX, GPU_TEX); gl.disable(gl.BLEND);
-        gl.useProgram(update.p); bind(0, st[cur]); bind(1, field);
+        gl.useProgram(update.p); bind(0, st[cur]); bind(1, field); bind(2, dens);
         const u = update.u;
-        gl.uniform1i(u.uState, 0); gl.uniform1i(u.uField, 1);
-        gl.uniform1f(u.uDrift, P.drift); gl.uniform1f(u.uKick, P.kick); gl.uniform1f(u.uMaxStep, 0.02);
+        gl.uniform1i(u.uState, 0); gl.uniform1i(u.uField, 1); gl.uniform1i(u.uDensity, 2);
+        gl.uniform1f(u.uDrift, P.drift); gl.uniform1f(u.uKick, P.kick); gl.uniform1f(u.uMaxStep, 0.45 / FG);
         gl.uniform1f(u.uActive, P.active); gl.uniform1f(u.uFrame, frame++); gl.uniform1f(u.uFallT, P.fallT);
         gl.uniform1i(u.uCircle, P.circle ? 1 : 0); gl.uniform1i(u.uMode, P.mode);
         gl.drawArrays(gl.TRIANGLES, 0, 3); cur = 1 - cur;
@@ -624,15 +633,28 @@ class Plate {
     if (k < 1 || !this.tuned || this.level < .001 || this.solverFailed) return;
     const a = this.level;
     const drift = 0.008 * a, kick = 0.0012 * a + 0.008 * this.hit, circle = this.shape === "circle";
-    const { p, E, EX, EY } = this, MAXSTEP = 0.02;
+    const { p, E, EX, EY } = this, MAXSTEP = 0.45 / FG;
+    // Coarse occupancy is sufficient for contact pressure in the CPU fallback.
+    const bins=320;
+    const density=this.grainDensity || (this.grainDensity=new Float32Array(bins*bins));density.fill(0);
+    for(let i=0;i<k;i++)density[Math.min(bins-1,(p[2*i+1]*bins)|0)*bins+Math.min(bins-1,(p[2*i]*bins)|0)]++;
+    const occupancy=(x,y)=>density[clamp(y,0,bins-1)*bins+clamp(x,0,bins-1)];
     for (let i = 0; i < k; i++) {
       let x = p[2 * i], y = p[2 * i + 1];
-      const idx = Math.min((y * FG) | 0, FG - 1) * FG + Math.min((x * FG) | 0, FG - 1);
-      const stableStep = Math.min(drift, 0.45 * E[idx] / (EX[idx] ** 2 + EY[idx] ** 2 + 1e-8));
-      let gx = stableStep * EX[idx], gy = stableStep * EY[idx];
-      const mag = Math.hypot(gx, gy);                 // clamp the slide by magnitude, not per axis (no diagonal bias)
+      const sx=clamp(x*FG-.5,0,FG-1),sy=clamp(y*FG-.5,0,FG-1),ix=Math.floor(sx),iy=Math.floor(sy),tx=sx-ix,ty=sy-iy;
+      const sample=field=>{
+        const a=iy*FG+ix,b=iy*FG+Math.min(ix+1,FG-1),c=Math.min(iy+1,FG-1)*FG+ix,d=Math.min(iy+1,FG-1)*FG+Math.min(ix+1,FG-1);
+        return (1-ty)*((1-tx)*field[a]+tx*field[b])+ty*((1-tx)*field[c]+tx*field[d]);
+      };
+      const energy=sample(E),dx=sample(EX),dy=sample(EY);
+      const stableStep = Math.min(drift, 0.45 * energy / (dx*dx+dy*dy+1e-8));
+      let gx = stableStep * dx, gy = stableStep * dy;
+      const mag = Math.hypot(gx, gy);
       if (mag > MAXSTEP) { gx *= MAXSTEP / mag; gy *= MAXSTEP / mag; }
-      const kk = kick * Math.sqrt(E[idx]);
+      const bx=Math.min(bins-1,(x*bins)|0),by=Math.min(bins-1,(y*bins)|0),crowded=clamp((occupancy(bx,by)-2)/8,0,1);
+      let px=occupancy(bx+1,by)-occupancy(bx-1,by),py=occupancy(bx,by+1)-occupancy(bx,by-1);
+      const pressure=0.7/GRID*crowded*a/(1+Math.hypot(px,py));gx+=px*pressure;gy+=py*pressure;
+      const kk = kick * Math.sqrt(Math.max(0,energy)) + 0.5/GRID*crowded*a;
       x = Math.abs(x - gx + randn() * kk); y = Math.abs(y - gy + randn() * kk);
       if (x > 1) x = 2 - x; if (y > 1) y = 2 - y;
       x = clamp(x, 0, 1); y = clamp(y, 0, 1);

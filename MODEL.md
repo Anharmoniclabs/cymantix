@@ -44,3 +44,7 @@ The live signal panel shows the waveform, Fourier spectrum, peaks, FFT inverse r
 Audio capture requests echo cancellation, noise suppression and automatic gain control off; browser/OS capture and resampling can still affect the signal. Captured playback is muted locally to avoid echo. The tests exercise the capture handler with a synthetic MediaStream; they do not claim an end-to-end measurement of YouTube's codec or the user's audio device.
 
 Definitions: [SciPy DCT-II](https://docs.scipy.org/doc/scipy/reference/generated/scipy.fft.dct.html), [AudioWorklet PCM inputs](https://developer.mozilla.org/en-US/docs/Web/API/AudioWorkletProcessor/process).
+
+## Grain transport and visible area
+
+Grains now use density-dependent contact spreading to resist unlimited overlap during vibration. Drift is capped below half a field cell, and CPU fields use the same bilinear sampling convention as the GPU. The pressure term is an approximate visual granular model; it is disabled with the rest of transport at zero drive. See the [330 Hz before/after comparison](docs/sand-transport/README.md) and overcrowded-node regression test.

@@ -24,3 +24,12 @@ assert(final<initial*.8,'Grains must converge toward actual mode nodes');
 assert(plate.p.every(v=>Number.isFinite(v)&&v>=0&&v<=1));
 assert(plate.mass>0,'Sand must be present before audio');
 console.log('PASS: JavaScript syntax, full modal energy, single-mode nodes, silence freeze, nodal settling, finite bounded grains, visible initial sand.');
+// A zero-width pile at a node must spread under vibration; points may not
+// disappear into one saturated pixel forever. With no drive it must stay still.
+plate.reset();plate.mass=.1;plate.tuned=true;plate.level=1;
+for(let i=0;i<Math.floor(plate.mass*26000);i++){plate.p[2*i]=.5;plate.p[2*i+1]=.5;}
+for(let i=0;i<180;i++)plate.step();
+const occupied=new Set();for(let i=0;i<Math.floor(plate.mass*26000);i++)occupied.add(Math.floor(plate.p[2*i]*1024)+1024*Math.floor(plate.p[2*i+1]*1024));
+assert(occupied.size>40,`Crowded grains must retain visible area: ${occupied.size} pixels`);
+const settled=plate.p.slice();plate.level=0;plate.step();assert.deepEqual(plate.p,settled);
+console.log(`PASS: crowded nodal pile spreads to ${occupied.size} pixels; silence preserves it.`);
