@@ -1,13 +1,4 @@
 // Browser bridge between physical mode shapes and the continuous audio-rate solver.
-// The actuator: the square is driven at its centre (Chladni's bolt), so only symmetric figures
-// ring; the circle on a diameter at r = 0.6, so each degenerate pair rings only its cos member.
-function actuatorPoint(set) { return set.drive || [.5, .5]; }
-function actuatorDrive(set, i, grid) {
-  const [px, py] = actuatorPoint(set), x = px * grid - .5, y = py * grid - .5;
-  const ix = Math.floor(x), iy = Math.floor(y), tx = x - ix, ty = y - iy, offset = i * grid * grid;
-  const at = (xx, yy) => set.W[offset + yy * grid + xx];
-  return (1 - ty) * ((1 - tx) * at(ix, iy) + tx * at(ix + 1, iy)) + ty * ((1 - tx) * at(ix, iy + 1) + tx * at(ix + 1, iy + 1));
-}
 class PhysicalPlateModel {
   constructor(context, input, receive, fail) {
     this.context=context;this.input=input;this.receive=receive;this.fail=fail;this.revision=0;
@@ -34,15 +25,17 @@ class PhysicalPlateModel {
     const {material,sideM}=VirtualPlate, grid=Math.sqrt(set.W.length/set.f.length);
     const cellArea=sideM*sideM/(grid*grid);
     const frequencies=[],gains=[],weights=[];this.indices=[];
+    // Bilinear actuator location in the same cell-centred grid as the mode data.
+    const x=.37*grid-.5,y=.31*grid-.5,ix=Math.floor(x),iy=Math.floor(y),tx=x-ix,ty=y-iy;
     for(let i=0;i<set.f.length;i++) {
-      const frequency=set.f[i];
-      if(frequency>=this.context.sampleRate/2)continue;
+      if(set.f[i]>=this.context.sampleRate/2)continue;
       const offset=i*grid*grid;let integral=0;
       for(let k=0;k<grid*grid;k++)integral+=set.W[offset+k]**2;
-      const drive=actuatorDrive(set,i,grid);
+      const at=(xx,yy)=>set.W[offset+yy*grid+xx];
+      const drive=(1-ty)*((1-tx)*at(ix,iy)+tx*at(ix+1,iy))+ty*((1-tx)*at(ix,iy+1)+tx*at(ix+1,iy+1));
       const mass=material.densityKgM3*material.thicknessM*cellArea*integral;
       if(!(mass>0))throw new Error('Non-positive modal mass');
-      frequencies.push(frequency);gains.push(material.forceNPerFullScale*drive/mass);weights.push(integral/(grid*grid));this.indices.push(i);
+      frequencies.push(set.f[i]);gains.push(material.forceNPerFullScale*drive/mass);weights.push(integral/(grid*grid));this.indices.push(i);
     }
     this.node.port.postMessage({type:'configure',revision:this.revision,frequencies,gains,weights});
   }
@@ -64,5 +57,5 @@ async function loadClampedCircle(grid) {
     frequencies.push(profile.frequency);la.push(profile.m);lb.push(profile.n);fields.push(w);
   }
   const W=new Float32Array(fields.length*grid*grid);fields.forEach((w,i)=>W.set(w,i*grid*grid));
-  return {f:Float32Array.from(frequencies),la:Uint8Array.from(la),lb:Uint8Array.from(lb),W,physical:true,drive:[.8,.5]};
+  return {f:Float32Array.from(frequencies),la:Uint8Array.from(la),lb:Uint8Array.from(lb),W,physical:true};
 }
