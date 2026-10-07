@@ -60,8 +60,16 @@
     <button id="bShake">⟲ Shake off</button>
     <button id="bShape">◯ Circular plate</button>
   </div>
+  <div class="status" id="signalStatus">Signal analysis waits for audio.</div>
   <div class="status" id="st">Pick a source to start, or drag across the plate to bow it. Nothing leaves your browser.</div>
 
+  <details id="signalDetails">
+    <summary>Live signal: waveform &amp; frequency analysis</summary>
+    <p id="signalReadout">Share the YouTube tab with “Share tab audio” enabled. Every captured sample drives the plate; all analyses inspect that same mono actuator signal.</p>
+    <canvas id="signalCanvas" width="1024" height="320" style="aspect-ratio:3.2" aria-label="Captured waveform and measured frequency spectrum"></canvas>
+    <p id="signalChecks"></p>
+    <p>FFT and DCT cover DC to Nyquist. NUDFT evaluates a nonuniform frequency grid including every modeled plate resonance; constant-Q uses frequency-dependent windows. RFT reads the latest 610 samples with the stored unitary matrix. These analyses share one physical input and do not add duplicate forces. The sand shows the modeled plate response, with finite modes and approximate grain motion.</p>
+  </details>
   <details>
     <summary>What am I looking at?</summary>
     <p>Incoming audio drives a fixed point on a modeled 1 mm steel plate. Each retained
@@ -147,14 +155,20 @@ function startDemo() {
 async function startTab() {
   try {
     ensureCtx();
-    const s = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    const s = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: {echoCancellation:false, noiseSuppression:false, autoGainControl:false} });
     if (!s.getAudioTracks().length) {
       s.getTracks().forEach(t => t.stop());
       setStatus("No audio shared. Pick a tab and tick “Share tab audio”."); return;
     }
     // Keep the share session alive; all capture tracks are released on source replacement.
     mark("bTab");
-    useSource(ctx.createMediaStreamSource(s), false, () => s.getTracks().forEach(t => t.stop()));
+    const capture=ctx.createMediaStreamSource(s);
+    useSource(capture, false, () => s.getTracks().forEach(t => t.stop()));
+    s.getAudioTracks()[0].addEventListener('ended',()=>{
+      if(srcNode!==capture)return;
+      capture.disconnect();srcNode=null;stopSrc=null;mark(null);
+      setStatus('Audio sharing ended. Share the YouTube tab again to resume.');
+    });
     setStatus("Listening to the shared tab. Play your music there.");
   } catch (e) { setStatus("Tab audio unavailable: " + e.message); }
 }
@@ -677,6 +691,33 @@ function draw(t) {
   st.setProperty("--glow", pl.light.map(c => Math.round(c * 255)).join(","));
   st.setProperty("--ga", pl.glow.toFixed(3));
 }
+
+// Live measurements from the exact worklet PCM, computed outside the audio thread.
+let displayedSignal=null;
+function updateSignalReadout() {
+  const model=physicalModel;if(!model)return;
+  if(model.analysisError) {$("signalStatus").textContent='Signal analysis unavailable: '+model.analysisError;return;}
+  const a=model.analysis;if(!a || a===displayedSignal)return;displayedSignal=a;
+  const level=20*Math.log10(a.rms+1e-12);
+  $("signalStatus").textContent=`FFT · DCT · NUDFT · constant-Q · RFT ${a.rftState} | ${a.rate.toLocaleString()} samples/s | ${level.toFixed(1)} dBFS`;
+  $("signalReadout").textContent=`Same captured PCM: ${a.sampleCount} samples (${(1000*a.windowSeconds).toFixed(1)} ms). `+
+    `FFT peak ${a.fft.frequencyHz.toFixed(1)} Hz; DCT peak ${a.dct.frequencyHz.toFixed(1)} Hz; `+
+    `NUDFT peak ${a.nudft.frequencyHz.toFixed(1)} Hz; constant-Q peak ${a.cqt.frequencyHz.toFixed(1)} Hz.`;
+  $("signalChecks").textContent=`FFT reconstruction maximum error ${a.reconstructionError.toExponential(2)}; `+
+    `FFT energy error ${a.fftEnergyError.toExponential(2)}; DCT energy error ${a.dctEnergyError.toExponential(2)}. `+
+    (a.rft?`RFT energy error ${a.rft.energyError.toExponential(2)} (quantized matrix).`:a.rftError||'RFT matrix loading.');
+  const canvas=$("signalCanvas"),ctx=canvas.getContext('2d'),w=canvas.width,h=canvas.height;
+  ctx.fillStyle='#10151c';ctx.fillRect(0,0,w,h);ctx.strokeStyle='#e8c68c';ctx.lineWidth=1.5;
+  ctx.beginPath();for(let i=0;i<a.waveform.length;i++){const x=i*w/(a.waveform.length-1),y=70-a.waveform[i]*55;i?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();
+  ctx.strokeStyle='#76bad2';ctx.beginPath();
+  for(let x=0;x<w;x++) {
+    const frequency=20*((a.rate/2)/20)**(x/(w-1)),bin=Math.min(a.spectrum.length-1,Math.round(frequency*a.sampleCount/a.rate));
+    const db=20*Math.log10(a.spectrum[bin]+1e-12),y=285-clamp((db+100)/100,0,1)*140;
+    x?ctx.lineTo(x,y):ctx.moveTo(x,y);
+  }ctx.stroke();ctx.fillStyle='#aeb7c2';ctx.font='18px system-ui';
+  ctx.fillText('Captured waveform (fixed amplitude scale)',12,22);ctx.fillText('20 Hz · logarithmic frequency → '+(a.rate/2).toLocaleString()+' Hz | −100 to 0 dBFS',12,310);
+}
+
 let last = 0, sandClock = 0;
 function loop(t) {
   requestAnimationFrame(loop);
@@ -689,6 +730,7 @@ function loop(t) {
   while (sandClock >= 1/60) { plate.step(); sandClock -= 1/60; }
   renderSand();
   draw(t);
+  updateSignalReadout();
   $("bShake").disabled = !(plate.mass > 0 && !plate.falling);
 }
 requestAnimationFrame(loop);

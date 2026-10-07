@@ -34,3 +34,13 @@ shake-off, and mobile layout.
 This is a defined virtual plate model. It is not a calibrated measurement of a particular
 physical plate: real dimensions, boundary hardware, material variation, actuator coupling,
 and damping would need measured parameters for that.
+
+## Captured-signal analysis
+
+The worklet copies an ordered 4096-sample PCM window approximately every 120 ms from the same mono samples integrated by the physical solver. No display-frame waveform polling supplies these transforms. A dedicated worker computes FFT, orthonormal DCT-II, nonuniform-frequency DFT, constant-Q projections, and the repository's quantized 610-point unitary RFT. Busy workers skip analysis snapshots, never physical input samples. Reports carry a configuration revision and sample counter so stale source/plate reports are rejected.
+
+The live signal panel shows the waveform, Fourier spectrum, peaks, FFT inverse reconstruction error, FFT/DCT Parseval errors and RFT quantization energy error. NUDFT uses a Hann-windowed projection at 160 logarithmic frequencies from 20 Hz to the lesser of 20 kHz and Nyquist, plus every modeled resonance; constant-Q uses Q=24 windows capped at 4096 samples. These sampled analyses do not claim infinite frequency resolution. FFT/DCT use all their bins; DCT values are orthonormal cosine coefficients, not Fourier amplitudes.
+
+Audio capture requests echo cancellation, noise suppression and automatic gain control off; browser/OS capture and resampling can still affect the signal. Captured playback is muted locally to avoid echo. The tests exercise the capture handler with a synthetic MediaStream; they do not claim an end-to-end measurement of YouTube's codec or the user's audio device.
+
+Definitions: [SciPy DCT-II](https://docs.scipy.org/doc/scipy/reference/generated/scipy.fft.dct.html), [AudioWorklet PCM inputs](https://developer.mozilla.org/en-US/docs/Web/API/AudioWorkletProcessor/process).

@@ -6,7 +6,9 @@ The browser integrates damped modal oscillators at the audio sample rate, using 
 
 Sand follows the gradient of time-averaged acceleration energy. The strongest 12 modes retain their phase covariance; all remaining modes contribute diagonal energy, avoiding false empty regions from discarded broadband energy. Grain transport is an approximation, not a discrete contact-mechanics simulation. A real plate requires measured geometry, mounting, damping and actuator calibration.
 
-Rendering is 1024 × 1024, with 262,144 individual GPU grains or 26,000 CPU grains. Sand is visible before playback and stops moving after vibration decays. The FFT provides the pitch readout only. RFT research data and the earlier desktop visualizer remain separate from the web solver.
+Rendering is 1024 × 1024, with 262,144 individual GPU grains or 26,000 CPU grains. Sand is visible before playback and stops moving after vibration decays. FFT, orthonormal DCT-II, NUDFT, constant-Q and the stored 610-point RFT all read PCM snapshots from the **same AudioWorklet input** that drives the plate. A worker runs the analysis so it cannot block the audio-rate solver. Open **Live signal** to see the captured waveform, spectrum, measured peaks and numerical energy/reconstruction checks.
+
+These transforms analyse the single actuator signal; summing their outputs as independent forces would count the same sound repeatedly. The finite plate response is not a lossless one-to-one encoding of sound. Stereo is arithmetically downmixed to the one point actuator, preserving phase (opposite channels can cancel). The FFT/DCT cover their entire discrete band to Nyquist; NUDFT and constant-Q probe 160 logarithmic frequencies plus each retained plate resonance. The RFT's 610-sample window is shorter than the 4096-sample FFT/DCT window; its coefficients are not claimed to be independent physical Fourier bins.
 
 See [MODEL.md](MODEL.md) for constants and limitations. Regenerate mode data with `tools/export_modes.py` and `tools/export_clamped_circle.py`.
 
@@ -14,6 +16,7 @@ Verification:
 
 ```sh
 node tools/verify-physics.cjs
+node tools/verify-signal.cjs
 python -m http.server 8765
 # in another terminal, with Playwright and Chromium installed:
 node tools/verify-web.cjs

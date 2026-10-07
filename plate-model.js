@@ -2,6 +2,16 @@
 class PhysicalPlateModel {
   constructor(context, input, receive, fail) {
     this.context=context;this.input=input;this.receive=receive;this.fail=fail;this.revision=0;
+    this.analysis=null;this.analysisBusy=false;this.analysisError=null;
+    try {
+      this.analysisWorker=new Worker('signal-worker.js');
+      this.analysisWorker.onmessage=({data})=>{
+        this.analysisBusy=false;
+        if(data.revision!==this.revision)return;
+        if(data.error)this.analysisError=data.error;else {this.analysis=data;this.analysisError=null;}
+      };
+      this.analysisWorker.onerror=()=>{this.analysisError='Signal analysis worker failed';this.analysisBusy=false;this.analysisWorker.terminate();this.analysisWorker=null;};
+    } catch(error) {this.analysisError=error.message;}
     this.ready=this.start();
   }
   async start() {
@@ -12,7 +22,12 @@ class PhysicalPlateModel {
         if(data.revision!==this.revision)return;
         const energy=new Float64Array(this.set.f.length), displacement=new Float64Array(this.set.f.length);
         this.indices.forEach((original,i)=>{energy[original]=data.energy[i];displacement[original]=data.displacement[i];});
-        this.receive({...data,energy,displacement,selected:data.selected.map(i=>this.indices[i])});
+        const {pcm,...motion}=data;
+        this.receive({...motion,energy,displacement,selected:data.selected.map(i=>this.indices[i])});
+        if(pcm && this.analysisWorker && !this.analysisBusy) {
+          this.analysisBusy=true;
+          this.analysisWorker.postMessage({pcm,rate:this.context.sampleRate,frequencies:Array.from(this.set.f),revision:this.revision,endSample:data.endSample},[pcm.buffer]);
+        }
       };
       this.node.onprocessorerror=()=>this.fail('The plate solver stopped. Reload to restart it.');
       this.input.connect(this.node);this.node.connect(this.context.destination);
@@ -20,7 +35,7 @@ class PhysicalPlateModel {
     } catch(error) {this.fail('Continuous plate simulation is unavailable: '+error.message);}
   }
   configure(set) {
-    this.set=set;this.revision++;
+    this.set=set;this.revision++;this.analysis=null;
     if(!this.node || !set.physical)return;
     const {material,sideM}=VirtualPlate, grid=Math.sqrt(set.W.length/set.f.length);
     const cellArea=sideM*sideM/(grid*grid);

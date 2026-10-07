@@ -1,11 +1,11 @@
 import './modal-core.js';
 class PlateProcessor extends AudioWorkletProcessor {
   constructor() {
-    super(); this.bank=null;this.revision=0;
+    super(); this.bank=null;this.revision=0; this.pcm=new Float32Array(4096); this.cursor=0; this.endSample=0; this.reportCount=0;
     this.port.onmessage=({data})=>{
       if(data.type==='configure') {
         this.bank=new VirtualPlate.ModalBank(data.frequencies,data.gains,sampleRate,data.weights);
-        this.revision=data.revision;
+        this.revision=data.revision;this.pcm.fill(0);this.cursor=0;this.endSample=0;this.reportCount=0;
       }
     };
   }
@@ -15,9 +15,19 @@ class PlateProcessor extends AudioWorkletProcessor {
     for(let i=0;i<length;i++) {
       // A single point actuator: arithmetic channel downmix, with phase preserved.
       let sample=0;for(const channel of channels) sample+=channel[i];
-      this.bank.step(channels.length?sample/channels.length:0);
+      const mono=channels.length?sample/channels.length:0;
+      this.bank.step(mono);
+      this.pcm[this.cursor]=mono;this.cursor=(this.cursor+1)%this.pcm.length;this.endSample++;
     }
-    if(this.bank.samples>=sampleRate*.04) this.port.postMessage({revision:this.revision,...this.bank.report()});
+    if(this.bank.samples>=sampleRate*.04) {
+      const report={revision:this.revision,...this.bank.report(),endSample:this.endSample};
+      // Analysis snapshots are bounded to ~8 Hz. Every sample still drives the plate.
+      if(++this.reportCount%3===0) {
+        report.pcm=new Float32Array(this.pcm.length);
+        for(let i=0;i<this.pcm.length;i++)report.pcm[i]=this.pcm[(this.cursor+i)%this.pcm.length];
+        this.port.postMessage(report,[report.pcm.buffer]);
+      } else this.port.postMessage(report);
+    }
     // The analysis branch stays silent. Existing source playback is unchanged.
     return true;
   }
