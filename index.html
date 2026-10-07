@@ -64,9 +64,9 @@
 
   <details>
     <summary>What am I looking at?</summary>
-    <p>Incoming audio drives a modeled 1 mm steel plate, each mode a damped oscillator at the
-       audio sample rate. The figure is the plate mode the music drives hardest at its real
-       resonance frequency (shown in the label), and the sand gathers on its nodal lines.</p>
+    <p>Incoming audio drives a fixed point on a modeled 1 mm steel plate. Each retained
+       mode follows a damped equation of motion at the audio sample rate. HD grains
+       migrate toward regions with lower time-averaged acceleration.</p>
     <p>The square has free edges; the circular plate has a clamped edge. This is a
        numerically defined virtual plate, not a measurement of a physical one.
        The sand transport is approximate. <a href="MODEL.md">Model, limits &amp; verification</a>.</p>
@@ -136,7 +136,7 @@ function startDemo() {
   const kick = () => {
     const o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime;
     o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.18);
-    g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
     o.connect(g); g.connect(bus); o.start(t); o.stop(t + 0.3);
   };
   setChord(); kick();
@@ -390,6 +390,7 @@ async function loadModeSet(shape) {
 
 // ============================================================ plate physics
 const topK = (arr, k) => Array.from(arr.keys()).sort((a, b) => arr[b] - arr[a]).slice(0, k);
+const DRIVE_PT = [0.37, 0.31];                   // where the plate is excited: off-centre, so few modes are silenced
 
 // Peaks of the spectrum excite the modes near them, weighted by closeness in cents, the peak's
 // strength, and how much the mode moves at the driving point (cf. Resonance Lab's mode weighting).
@@ -473,7 +474,7 @@ void main(){
              mix(texelFetch(uField,ivec2(fi.x,fj.y),0).xyz,texelFetch(uField,fj,0).xyz,blend.x),blend.y);                                                  // E, dE/dx, dE/dy
   float stableStep=min(uDrift,0.45*f.x/(dot(f.yz,f.yz)+1e-8));
   vec2 g=stableStep*f.yz; float m=length(g); if(m>uMaxStep) g*=uMaxStep/m;
-  float kk=uKick*(sqrt(max(f.x,0.0))+0.35);
+  float kk=uKick*sqrt(max(f.x,0.0));
   p=abs(p-g+vec2(n1,n2)*kk);
   p=vec2(p.x>1.0?2.0-p.x:p.x, p.y>1.0?2.0-p.y:p.y); p=clamp(p,0.0,1.0);
   if(uCircle==1){ vec2 d=p-0.5; float q=dot(d,d); if(q>0.2401) p=0.5+d*(0.49/sqrt(q)); }
@@ -557,14 +558,13 @@ class Plate {
   }
   setModes(set, shape) {
     this.set = set; this.shape = shape;
-    const M = set.f.length;
+    const M = set.f.length, idx = Math.floor(DRIVE_PT[1] * FG) * FG + Math.floor(DRIVE_PT[0] * FG);
     this.mf = Array.from(set.f);
     this.mband = this.mf.map(f => f < 250 ? 0 : f < 2500 ? 1 : 2);
     this.amp = new Float32Array(M); this.ts = new Float32Array(M); this.hold = new Int32Array(M);
-    this.drive = Float32Array.from({ length: M }, (_, i) => Math.abs(actuatorDrive(set, i, FG)));
-    this.figure = -1; this.figureNext = -1; this.figureAt = 0; this.figureHeld = 0;
+    this.drive = Float32Array.from({ length: M }, (_, i) => Math.abs(set.W[i * FG * FG + idx]));
     this.top = null; this.freq = 0; this.pendingReport = null;
-    this.E.fill(0); this.EX.fill(0); this.EY.fill(0); this.fieldMode = -1;
+    this.E.fill(0); this.EX.fill(0); this.EY.fill(0);
     physicalModel?.configure(set);
     this.reset();                                // fresh sand for a new plate
     if (this.rate) this.rebuildBanks();
@@ -591,15 +591,12 @@ class Plate {
     const report = this.pendingReport;
     if (!report || this.solverFailed) return;
     this.pendingReport = null; this.lastReport = report;
-    // Real elapsed time: slow frames drop reports, so per-report constants would slow the plate down.
-    const now = performance.now(); this.dt = Math.min(.5, Math.max(report.seconds, (now - (this.lastT || now)) / 1000)); this.lastT = now;
     this.db = 20 * Math.log10(report.rms + 1e-12);
     this.banks.FFT?.db(samples);
-    this.detectHits(samples);
-    this.chooseFigure(report);
     let peak = 0;
     for (let i=0;i<this.amp.length;i++) { this.amp[i] = Math.sqrt(report.energy[i]) / VirtualPlate.material.gravity; peak = Math.max(peak,this.amp[i]); }
-    this.hit *= Math.exp(-this.dt / .11);
+    // Display meter only; the field keeps absolute acceleration squared, with no AGC.
+    this.hit = 0;
     if (!this.falling && (report.rms > 1e-8 || peak > 1e-6)) this.mass = Math.min(1, this.mass + report.seconds * .3);
     this.buildField(report);
     this.updateLight();
@@ -635,94 +632,37 @@ class Plate {
     this.glow += (gt - this.glow) * 0.012;
   }
 
-  detectHits(samples) {
-    // Transients, as in the original player: positive spectral flux of the newest ~23 ms per band
-    // (low / mid / high) against that band's running average. A hit throws the sand off the lines;
-    // it slides back into the figure between beats.
-    const bank = this.banks.FFT; if (!bank) return;
-    const sp = bank.short(samples), prev = bank.sprev; this.frame++;
-    let strength = 0; const hitBands = [];
-    for (let b = 0; b < 3; b++) {
-      let flux = 0; const mk = bank.sbands[b];
-      for (let i = 0; i < sp.length; i++) if (mk[i]) { const d = sp[i] - prev[i]; if (d > 0) flux += d; }
-      flux *= bank.fluxnorm;
-      const ratio = flux / (this.bflux[b] + 1e-6);
-      if (flux > 0.6 && ratio > 1.5 && this.frame - this.blast[b] >= 2) {
-        this.blast[b] = this.frame; strength = Math.max(strength, Math.min((ratio - 1) / 2.5, 1)); hitBands.push(b);
-      }
-      this.bflux[b] += (flux - this.bflux[b]) * 0.12;
-    }
-    prev.set(sp);
-    this.hitBands = hitBands;
-    if (!hitBands.length) return;
-    this.hit = Math.max(this.hit, strength); this.hitFlash = 1;
-  }
-
-  chooseFigure(report) {
-    // True to frequency: the plate keeps its real mode frequencies, and the figure is the mode the
-    // music drives hardest through its own resonance. Harmonics count, so a note far from any mode
-    // can still ring a higher one through its overtones. One mode is shown, held >= 1.2 s.
-    const spec = this.banks.FFT?.spec, M = this.mf.length;
-    if (!spec || !M) return;
-    const df = RATE / FFT_N;
-    // ~0.7 s smoothed spectrum (as chladni-tui does), not the instantaneous one, which flips
-    // between chord tones and drum hits on every frame.
-    if (!this.smoothSpec || this.smoothSpec.length !== spec.length) this.smoothSpec = new Float32Array(spec.length);
-    const sm = this.smoothSpec, k = 1 - Math.exp(-this.dt / .7);
-    for (let j = 0; j < sm.length; j++) sm[j] += (spec[j] - sm[j]) * k;
-    if (report.rms < 1e-4) { this.figureHeld = 0; return; }
-    // Each mode's driven response: smoothed power spectrum through the mode's resonance curve
-    // R = 1/(1+(Q(r-1/r))^2), Q = 1/(2 zeta), so a note between two modes drives the nearer one
-    // harder. Music's spectrum falls with frequency; an f tilt on power keeps kick and bass from
-    // winning every time, so melody and chords get their share.
-    const Q = 1 / (2 * VirtualPlate.material.dampingRatio), score = new Float32Array(M); let best = -1;
-    for (let i = 0; i < M; i++) {
-      const f = this.mf[i]; if (f > 7500) continue;
-      const j0 = Math.max(2, Math.floor(f * .75 / df)), j1 = Math.min(sm.length - 1, Math.ceil(f * 1.33 / df));
-      let power = 0;
-      for (let j = j0; j <= j1; j++) { const r = j * df / f, x = Q * (r - 1 / r); power += sm[j] * sm[j] / (1 + x * x); }
-      score[i] = power * f / 100;
-      if (best < 0 || score[i] > score[best]) best = i;
-    }
-    if (best < 0 || score[best] < 1e-14) return;
-    const cur = this.figure;
-    if (cur >= 0 && score[cur] > score[best] / 2) best = cur;   // hysteresis: switch only for a clearly stronger mode
-    if (best !== this.figureNext) { this.figureNext = best; this.figureHeld = 0; } else this.figureHeld += this.dt;
-    const now = performance.now();
-    if (best === cur || this.figureHeld < .3 || (cur >= 0 && now - this.figureAt < 1200)) return;
-    this.figure = best; this.figureAt = now; this.hit = Math.max(this.hit, .4);   // the plate jolts as the figure changes
-  }
-
-
   buildField(report) {
-    // One held figure at a time (as in chladni-tui): the chosen mode, or before the first choice
-    // the mode the solver rings hardest. Mixing modes leaves sand only where every nodal set
-    // crosses, which reads as scattered dots. The solver's energies set how hard the plate shakes.
-    const {E,EX,EY}=this, size=FG*FG, W=this.set.W, energy=report.energy;
-    let loudest=0;for(const e of energy)loudest=Math.max(loudest,e);
-    let mode=this.figure;
-    if(mode<0&&loudest>0)for(let i=0;i<energy.length;i++)if(mode<0||energy[i]>energy[mode])mode=i;
-    if(mode>=0&&mode!==this.fieldMode) {
-      this.fieldMode=mode;let peak=1e-12;const a=mode*size;
-      for(let k=0;k<size;k++){E[k]=W[a+k]*W[a+k];peak=Math.max(peak,E[k]);}
-      for(let k=0;k<size;k++)E[k]/=peak;
-      for(let y=0;y<FG;y++)for(let x=0;x<FG;x++) {
-        const k=y*FG+x;
-        EX[k]=(E[y*FG+Math.min(FG-1,x+1)]-E[y*FG+Math.max(0,x-1)])*(x>0&&x<FG-1?FG/2:FG);
-        EY[k]=(E[Math.min(FG-1,y+1)*FG+x]-E[Math.max(0,y-1)*FG+x])*(y>0&&y<FG-1?FG/2:FG);
-      }
+    // Time-averaged acceleration covariance retains phase interference between the
+    // selected physical modes: E(x,y)=<a(x,y)^2>/g^2, not a normalized mode score.
+    const {E,EX,EY}=this, {selected,covariance}=report, size=FG*FG, n=selected.length;
+    const W=this.set.W, gravity2=VirtualPlate.material.gravity**2;
+    E.fill(0); EX.fill(0); EY.fill(0);
+    for(let i=0;i<n;i++) for(let j=0;j<=i;j++) {
+      const coefficient=covariance[i*n+j]*(i===j?1:2)/gravity2;
+      if(Math.abs(coefficient)<1e-20)continue;
+      const a=selected[i]*size,b=selected[j]*size;
+      for(let k=0;k<size;k++) E[k]+=coefficient*W[a+k]*W[b+k];
     }
-    // Level is relative to the recent peak (falls 4 dB/s), so a quiet browser tab drives the plate
-    // as hard as a loud one; silence stops the sand where it is.
-    const shake=loudest/VirtualPlate.material.gravity**2, dB=10*Math.log10(shake+1e-30), live=shake>1e-14&&report.rms>1e-4;
-    this.shakeRef=live?Math.max(dB,(this.shakeRef??dB)-4*this.dt):this.shakeRef;
-    const target=live?clamp((dB-(this.shakeRef-30))/30,0,1):0;
+    // Floating-point covariance accumulation can leave tiny negative roundoff.
+    let scale=0;
+    for(let k=0;k<size;k++) {E[k]=Math.max(0,E[k]);if(E[k]>scale)scale=E[k];}
+    // Absolute acceleration (g^2) sets how hard the plate shakes (level, mobility); the sand only
+    // needs the pattern's shape, so transport uses the field normalised to its own maximum.
+    // Sand is also light in physical units, so raw g^2 would leave it frozen at music levels.
+    const dB=10*Math.log10(scale+1e-30), target=scale>1e-14?Math.min(1,Math.max(0,(dB+70)/55)):0;
     this.level+=(target-this.level)*(target>this.level?.6:.12);
-    if(mode>=0&&live) {this.freq=this.mf[mode];this.top=[this.set.la[mode],this.set.lb[mode]];this.tuned=true;}
-    else if(!live) this.top=null;
-    this.coverage=1;
+    if(scale>1e-14) for(let k=0;k<size;k++) E[k]/=scale; else E.fill(0);
+    for(let y=0;y<FG;y++)for(let x=0;x<FG;x++) {
+      const k=y*FG+x;
+      EX[k]=(E[y*FG+Math.min(FG-1,x+1)]-E[y*FG+Math.max(0,x-1)])*(x>0&&x<FG-1?FG/2:FG);
+      EY[k]=(E[Math.min(FG-1,y+1)*FG+x]-E[Math.max(0,y-1)*FG+x])*(y>0&&y<FG-1?FG/2:FG);
+    }
+    let best=0;for(let i=1;i<this.amp.length;i++)if(this.amp[i]>this.amp[best])best=i;
+    if(this.amp[best]>1e-8) {this.freq=this.mf[best];this.top=[this.set.la[best],this.set.lb[best]];this.tuned=true;}
+    else {this.freq=0;this.top=null;}
+    this.coverage=report.coverage;
   }
-
 
   shakeOff() {
     if (this.falling || this.mass <= 0) return;
@@ -759,8 +699,8 @@ class Plate {
     }
     const k = Math.floor(this.mass * N);
     if (k < 1 || !this.tuned) { this.gpu.active = 0; return; }
-    const a = this.level > .02 ? Math.min(.18 + .82 * this.level + 1.4 * this.hit, 2.2) : 0;   // loudness and hits shake the plate
-    this.gpu.step({ mode: 0, active: k, circle, drift: 0.005 * a, kick: 0.004 * a + 0.016 * this.hit, fallT: 0 }, this.E, this.EX, this.EY);
+    const a = .35 + .65 * this.level;
+    this.gpu.step({ mode: 0, active: k, circle, drift: 0.008 * a, kick: 0.0012 * a + 0.008 * this.hit, fallT: 0 }, this.E, this.EX, this.EY);
   }
 
   step() {
@@ -768,8 +708,8 @@ class Plate {
     if (this.falling) { this.fallStep(); return; }
     const k = Math.floor(this.mass * GRAINS);
     if (k < 1 || !this.tuned) return;
-    const a = this.level > .02 ? Math.min(.18 + .82 * this.level + 1.4 * this.hit, 2.2) : 0;   // loudness and hits shake the plate
-    const drift = 0.005 * a, kick = 0.004 * a + 0.016 * this.hit, circle = this.shape === "circle";
+    const a = .35 + .65 * this.level;
+    const drift = 0.008 * a, kick = 0.0012 * a + 0.008 * this.hit, circle = this.shape === "circle";
     const { p, E, EX, EY } = this, MAXSTEP = 0.02;
     for (let i = 0; i < k; i++) {
       let x = p[2 * i], y = p[2 * i + 1];
@@ -778,7 +718,7 @@ class Plate {
       let gx = stableStep * EX[idx], gy = stableStep * EY[idx];
       const mag = Math.hypot(gx, gy);                 // clamp the slide by magnitude, not per axis (no diagonal bias)
       if (mag > MAXSTEP) { gx *= MAXSTEP / mag; gy *= MAXSTEP / mag; }
-      const kk = kick * (Math.sqrt(E[idx]) + 0.35);
+      const kk = kick * Math.sqrt(E[idx]);
       x = Math.abs(x - gx + randn() * kk); y = Math.abs(y - gy + randn() * kk);
       if (x > 1) x = 2 - x; if (y > 1) y = 2 - y;
       x = clamp(x, 0, 1); y = clamp(y, 0, 1);
@@ -824,7 +764,7 @@ function draw(t) {
   g.save(); g.scale(W / 640, W / 640);
   g.font = "600 17px system-ui, sans-serif"; g.textBaseline = "top";
   let txt;
-  if (pl.top) txt = `${noteName(pl.pitch || pl.freq)} · ${(pl.pitch || pl.freq).toFixed(0)} Hz · ${pl.db.toFixed(0)} dBFS · mode ${pl.top[0]},${pl.top[1]} (${pl.freq.toFixed(0)} Hz)`;
+  if (pl.top) txt = `${noteName(pl.pitch || pl.freq)} · ${(pl.pitch || pl.freq).toFixed(0)} Hz · ${pl.db.toFixed(0)} dBFS · mode ${pl.top[0]},${pl.top[1]}`;
   else if (!pl.set.physical || (ctx && !pl.lastReport)) txt = "loading plate model…";
   else txt = ctx ? "listening…" : "";
   if (pl.coverage < .95 && pl.top) txt += ` · field ${Math.round(pl.coverage*100)}%`;

@@ -16,7 +16,7 @@ for(const frequency of [74,440,1000]) {
   assert(error<.003,`Resonance ${frequency} Hz error ${error}`);
   results.push({frequencyHz:frequency,relativeAmplitudeError:error});
 }
-assert(tone(440,528).displacement[0]<tone(440,440).displacement[0]/5,'Detuning must reduce resonance');
+assert(tone(440,484).displacement[0]<tone(440,440).displacement[0]/5,'Detuning must reduce resonance');
 const low=tone(440,440,.05),high=tone(440,440,.1);
 assert(Math.abs(high.displacement[0]/low.displacement[0]-2)<1e-10);
 assert(Math.abs(high.energy[0]/low.energy[0]-4)<1e-10);
