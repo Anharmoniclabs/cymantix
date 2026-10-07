@@ -1,46 +1,31 @@
 # Cymantix
 
-A Chladni sand plate that reacts to music. Sound drives a virtual square plate
-(modes `cos(nπx)cos(mπy) − s·cos(mπx)cos(nπy)`, `f ≈ F₀(n²+m²)`); each mode is
-excited by the energy near its own resonance, loudness sets the drive, and the
-sand slides to the nodal lines.
+[Web player](https://anharmoniclabs.github.io/cymantix/): a virtual Chladni plate driven by incoming audio. Choose Demo or share a tab with audio. Drag on the plate to bow it; Shake off redistributes sand. No sensitivity knobs or pitch-to-pattern presets.
 
-**Web player:** https://anharmoniclabs.github.io/cymantix/ — play a demo, an audio
-file, a shared tab's audio, or the microphone. Everything runs in your browser.
+The browser integrates damped modal oscillators at the audio sample rate, using solved free-edge square steel plate modes or clamped circular modes. A fixed off-centre actuator couples the waveform to each mode through its modal mass and shape. Resonances and ring-down emerge from this system; frequencies never retune to the music.
 
-## Transforms
+Sand follows the gradient of time-averaged acceleration energy. The strongest 12 modes retain their phase covariance; all remaining modes contribute diagonal energy, avoiding false empty regions from discarded broadband energy. Grain transport is an approximation, not a discrete contact-mechanics simulation. A real plate requires measured geometry, mounting, damping and actuator calibration.
 
-The plate hears through four transforms at once — **FFT**, **DCT**, the **RFT**, and a
-**constant-Q** bank (one tuned filter per plate mode: long windows for low modes, short
-for high ones). Each scores every mode against its own loudness reference and a mode
-rings if any of them hears it. Over an 80-tone sweep, the constant-Q bank picks the
-nearest plate mode on 77/80 tones against 36–45/80 for the others; the fused set keeps
-that. (The constant-Q bank is evaluated at the mode frequencies, which favours it in this
-test.) The desktop app has a *Transforms* menu to switch each one on or off.
+Rendering is 1024 × 1024, with 262,144 individual GPU grains or 26,000 CPU grains. Sand is visible before playback and stops moving after vibration decays. The FFT provides the pitch readout only. RFT research data and the earlier desktop visualizer remain separate from the web solver.
 
-## The RFT
+See [MODEL.md](MODEL.md) for constants and limitations. Regenerate mode data with `tools/export_modes.py` and `tools/export_clamped_circle.py`.
 
-The plate listens through the Resonant Fourier Transform (L. M. Minier,
-*What I Got Wrong*, Eqs. 1–2):
+Verification:
 
-```
-f_k = {(k+1) φ},   Φ_nk = N^-1/2 exp(i 2π f_k n),   U = Φ (Φ^H Φ)^-1/2
+```sh
+node tools/verify-physics.cjs
+python -m http.server 8765
+# in another terminal, with Playwright and Chromium installed:
+node tools/verify-web.cjs
 ```
 
-`U` is unitary (energy-preserving). Dimensions are Fibonacci, the best-conditioned
-(κ(G) → 2.848): **web** N = 1597 / 610, **desktop** N = 2584 / 987. A plain FFT is one
-click away for comparison. No advantage over the FFT is claimed; the paper retracts
-those claims and this only uses the finite construction.
+## Desktop (Linux, PipeWire/Pulse)
 
-`tools/export_rft.py` regenerates `data/rft_*.bin` (int16-quantised `U^H`) for the web
-player.
+The desktop app is the earlier transform-based visualizer; it does not run the browser's audio-rate solver.
 
-## Desktop app (Linux, PipeWire/Pulse)
-
-Listens to whatever your system plays and shows MPRIS transport controls.
-
+```sh
+cd desktop
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+./run.sh
 ```
-cd desktop && python -m venv .venv && .venv/bin/pip install -r requirements.txt && ./run.sh
-```
-
-The first run builds the RFT matrices (~45 s) and caches them in `~/.cache/cymatic-widget/`.

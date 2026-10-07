@@ -1,0 +1,17 @@
+name: Plate verification
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node tools/verify-physics.cjs
+      - run: node tools/verify-field.cjs
+      - run: npm install --no-save playwright@1.61.1
+      - run: npx playwright install --with-deps chromium
+      - run: |
+          python3 -m http.server 8765 > /tmp/cymantix-server.log 2>&1 &
+          node tools/verify-web.cjs
