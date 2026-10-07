@@ -11,11 +11,13 @@ jobs:
       - run: node tools/verify-physics.cjs
       - run: node tools/verify-field.cjs
       - run: node tools/verify-signal.cjs
+      - run: node tools/verify-circle-model.cjs
       - run: npm install --no-save playwright@1.61.1
       - run: npx playwright install --with-deps chromium
       - run: |
           python3 -m http.server 8765 > /tmp/cymantix-server.log 2>&1 &
           node tools/verify-web.cjs
+          node tools/verify-circle.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

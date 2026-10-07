@@ -43,7 +43,7 @@ const {chromium} = require('playwright');
     await page.click('#bDemo');
     await page.click('#bShape');
     await page.waitForFunction(()=>plate.shape==='circle' && plate.lastReport?.energy.length===plate.mf.length && plate.mass>0);
-    assert(await page.evaluate(()=>Math.abs(plate.mf[0]-224.748)<.1), 'Clamped circular fundamental');
+    assert(await page.evaluate(()=>Math.abs(plate.mf[0]-117.883)<.1 && plate.set.boundary==='free'), 'Free circular fundamental');
     await page.click('#bShake');
     assert(await page.evaluate(()=>plate.falling));
     await page.setViewportSize({width:390,height:844});

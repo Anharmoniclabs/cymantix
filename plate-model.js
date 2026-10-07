@@ -55,16 +55,17 @@ class PhysicalPlateModel {
     this.node.port.postMessage({type:'configure',revision:this.revision,frequencies,gains,weights});
   }
 }
-async function loadClampedCircle(grid) {
-  const response=await fetch('data/clamped-circle.json');if(!response.ok)throw new Error('Circular plate data unavailable');
-  const {profiles}=await response.json(),frequencies=[],la=[],lb=[],fields=[];
+async function loadFreeCircle(grid) {
+  const response=await fetch('data/free-circle.json');if(!response.ok)throw new Error('Circular plate data unavailable');
+  const {profiles,boundary,radialScale=1}=await response.json(),frequencies=[],la=[],lb=[],fields=[];
+  if(boundary!=='free')throw new Error('Circular plate boundary mismatch');
   for(const profile of profiles) for(const sine of profile.m===0?[false]:[false,true]) {
     const w=new Float32Array(grid*grid);let maximum=0;
     for(let y=0;y<grid;y++) for(let x=0;x<grid;x++) {
       const xx=2*(x+.5)/grid-1, yy=2*(y+.5)/grid-1, radius=Math.hypot(xx,yy);
       if(radius>1)continue;
       const t=radius*(profile.radial.length-1),index=Math.min(profile.radial.length-2,Math.floor(t)),fraction=t-index;
-      const radial=profile.radial[index]*(1-fraction)+profile.radial[index+1]*fraction;
+      const radial=(profile.radial[index]*(1-fraction)+profile.radial[index+1]*fraction)*radialScale;
       const angle=profile.m*Math.atan2(yy,xx),value=radial*(sine?Math.sin(angle):Math.cos(angle));
       w[y*grid+x]=value;maximum=Math.max(maximum,Math.abs(value));
     }
@@ -72,5 +73,5 @@ async function loadClampedCircle(grid) {
     frequencies.push(profile.frequency);la.push(profile.m);lb.push(profile.n);fields.push(w);
   }
   const W=new Float32Array(fields.length*grid*grid);fields.forEach((w,i)=>W.set(w,i*grid*grid));
-  return {f:Float32Array.from(frequencies),la:Uint8Array.from(la),lb:Uint8Array.from(lb),W,physical:true};
+  return {f:Float32Array.from(frequencies),la:Uint8Array.from(la),lb:Uint8Array.from(lb),W,physical:true,boundary};
 }

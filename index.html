@@ -75,7 +75,7 @@
     <p>Incoming audio drives a fixed point on a modeled 1 mm steel plate. Each retained
        mode follows a damped equation of motion at the audio sample rate. HD grains
        migrate toward regions with lower time-averaged acceleration.</p>
-    <p>The square has free edges; the circular plate has a clamped edge. This is a
+    <p>Both plate shapes have free vibrating edges. This is a
        numerically defined virtual plate, not a measurement of a physical one.
        The sand transport is approximate. <a href="MODEL.md">Model, limits &amp; verification</a>.</p>
     <p><a href="https://github.com/Anharmoniclabs/cymantix">Source &amp; desktop app</a></p>
@@ -308,7 +308,7 @@ function analyticModes() {                       // classic cos/cos figures: use
   return { f: Float32Array.from(list, m => m.f), la: Uint8Array.from(list, m => m.n), lb: Uint8Array.from(list, m => m.m), W };
 }
 async function loadModeSet(shape) {
-  if (shape === "circle") return loadClampedCircle(FG);
+  if (shape === "circle") return loadFreeCircle(FG);
   const r = await fetch(`data/modes_${shape}.bin`);
   if (!r.ok) throw new Error(`modes_${shape}.bin: HTTP ${r.status}`);
   const ab = await r.arrayBuffer(), dv = new DataView(ab), n = dv.getUint32(0, true), fg = dv.getUint32(4, true);
@@ -576,10 +576,16 @@ class Plate {
     const dB=10*Math.log10(scale+1e-30), target=scale>1e-14?Math.min(1,Math.max(0,(dB+70)/55)):0;
     this.level+=(target-this.level)*(target>this.level?.6:.12);
     if(scale>1e-14) for(let k=0;k<size;k++) E[k]/=scale; else E.fill(0);
+    const inside=(x,y)=>this.shape!=="circle" || ((x+.5)/FG-.5)**2+((y+.5)/FG-.5)**2<=.25;
     for(let y=0;y<FG;y++)for(let x=0;x<FG;x++) {
       const k=y*FG+x;
-      EX[k]=(E[y*FG+Math.min(FG-1,x+1)]-E[y*FG+Math.max(0,x-1)])*(x>0&&x<FG-1?FG/2:FG);
-      EY[k]=(E[Math.min(FG-1,y+1)*FG+x]-E[Math.max(0,y-1)*FG+x])*(y>0&&y<FG-1?FG/2:FG);
+      if(!inside(x,y))continue;
+      // Never differentiate across the circle's zero-filled exterior: that
+      // would invent a downhill force toward the rim even on a free edge.
+      const left=x>0&&inside(x-1,y)?x-1:x,right=x<FG-1&&inside(x+1,y)?x+1:x;
+      const up=y>0&&inside(x,y-1)?y-1:y,down=y<FG-1&&inside(x,y+1)?y+1:y;
+      EX[k]=right>left?(E[y*FG+right]-E[y*FG+left])*FG/(right-left):0;
+      EY[k]=down>up?(E[down*FG+x]-E[up*FG+x])*FG/(down-up):0;
     }
     let best=0;for(let i=1;i<this.amp.length;i++)if(this.amp[i]>this.amp[best])best=i;
     if(this.amp[best]>1e-8) {this.freq=this.mf[best];this.top=[this.set.la[best],this.set.lb[best]];this.tuned=true;}
@@ -700,13 +706,14 @@ function draw(t) {
   g.save(); g.scale(W / 640, W / 640);
   g.font = "600 17px system-ui, sans-serif"; g.textBaseline = "top";
   let txt;
-  if (pl.top) txt = `${noteName(pl.pitch || pl.freq)} · ${(pl.pitch || pl.freq).toFixed(0)} Hz · ${pl.db.toFixed(0)} dBFS · mode ${pl.top[0]},${pl.top[1]}`;
+  if (pl.top) txt = `Input peak ${pl.pitch.toFixed(0)} Hz · ${pl.db.toFixed(0)} dBFS`;
   else if (!pl.set.physical || (ctx && !pl.lastReport)) txt = "loading plate model…";
   else txt = ctx ? "listening…" : "";
-  if (pl.coverage < .95 && pl.top) txt += ` · coherent ${Math.round(pl.coverage*100)}%`;
+
   g.fillStyle = "rgba(235,225,200,.8)"; g.fillText(txt, 14, 12);
-  g.fillStyle = "rgba(0,0,0,.45)"; g.fillRect(14, 40, 150, 6);
-  g.fillStyle = "rgba(226,196,140,.9)"; g.fillRect(14, 40, 150 * Math.min(pl.level, 1), 6);
+  if(pl.top) {g.font="14px system-ui, sans-serif";g.fillText(`Plate mode ${pl.top[0]},${pl.top[1]} · resonance ${pl.freq.toFixed(1)} Hz`,14,35);}
+  g.fillStyle = "rgba(0,0,0,.45)"; g.fillRect(14, 58, 150, 6);
+  g.fillStyle = "rgba(226,196,140,.9)"; g.fillRect(14, 58, 150 * Math.min(pl.level, 1), 6);
   g.restore();
   // the only colour: a faint glow behind the plate, in the pitch's colour
   const st = document.documentElement.style;

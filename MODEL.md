@@ -23,8 +23,23 @@ GPU path only advances and renders the grains; it does not choose the pattern.
 For transport the field is divided by its own maximum, so the pattern shape stays visible at any
 music level; the absolute acceleration only sets the shaking level (sand mobility and the meter).
 
-The circular option uses clamped Kirchhoff plate modes. Its radial profiles satisfy the
-clamped boundary equation and are checked by `tools/export_clamped_circle.py`.
+The circular option now uses **free-edge Kirchhoff plate modes**, matching the square's
+free perimeter. Radial bending moment and effective shear vanish at the rim; displacement
+is not constrained to zero. `tools/export_free_circle.py` solves the Bessel determinant,
+checks boundary residuals and known frequency parameters, and exports 513-point quantized
+radial profiles. Rigid translation/tilt are excluded from this flexural model. The first
+flexural resonance is 117.883 Hz for the same material and radius=side/2.
+
+The former clamped circular model made every mode stationary at the rim, creating a
+persistent sand collection ring. Changing to free edges changes the modeled mounting;
+it does not modify incoming pitches or choose a decorative shape. Spatial derivatives
+use only cells inside the circle, avoiding a false downward gradient into zero-filled
+exterior cells. The readout separately labels the input spectral peak and the strongest
+plate mode's own resonance.
+
+The browser regression seeds an existing rim pile, applies 38 Hz then 198.069 Hz without
+resetting grains, and requires visible sand to return to the interior on GPU and CPU.
+The old clamped exporter/data are retained for reproducibility but are not loaded by the web player.
 
 `tools/verify-physics.cjs` checks resonance, detuning, linear amplitude, quadratic energy,
 exact ring-down, phase cancellation, silence, 20 kHz input, and nodal actuation. The browser
